@@ -17,7 +17,8 @@ class DRMADE(nn.Module):
             num_mix=config.num_mix,
             num_dist_parameters=config.num_dist_parameters,
             distribution=config.distribution,
-            parameters_transform=config.parameters_transform
+            parameters_transform=config.parameters_transform,
+            name=None,
     ):
         super(DRMADE, self).__init__()
 
@@ -26,6 +27,14 @@ class DRMADE(nn.Module):
         self.num_mix = num_mix
         self.distribution = distribution
         self.parameters_transform = parameters_transform
+        self.made_hidden_layers = made_hidden_layers
+
+        self.name = 'DRMADE-l{}-h{}-mix{},{}'.format(
+            self.latent_size,
+            ','.join(str(i) for i in made_hidden_layers),
+            self.num_mix,
+            self.distribution.__name__,
+        ) if not name else name
 
         assert len(self.parameters_transform) == num_dist_parameters
         self._feature_perm_indexes = [j for i in range(self.latent_size) for j in
@@ -85,3 +94,20 @@ class DRMADE(nn.Module):
     def latent_regularization_term(self, features):
         norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
         return (norm_features @ norm_features.reshape(self.latent_size, -1)).sum()
+
+    def save(self, path):
+        t.save(self.state_dict(), path)
+
+    def load(self, path, device=None):
+        params = t.load(path) if not device else t.load(path, map_location=device)
+
+        added = 0
+        for name, param in params.items():
+            if name in self.state_dict().keys():
+                try:
+                    self.state_dict()[name].copy_(param)
+                    added += 1
+                except Exception as e:
+                    print(e)
+                    pass
+        print('loaded {:.2f}% of params'.format(100 * added / float(len(self.state_dict().keys()))))
