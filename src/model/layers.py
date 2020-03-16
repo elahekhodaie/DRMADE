@@ -143,8 +143,8 @@ class Encoder(nn.Module):
         self.conv3 = nn.Conv2d(64, 128, 5, bias=bias, padding=2)
         nn.init.xavier_uniform_(self.conv3.weight, gain=nn.init.calculate_gain('leaky_relu'))
         self.bn2d3 = nn.BatchNorm2d(128, eps=bn_eps, affine=bn_affine)
-        self.fc1 = nn.Linear(128 * 4 * 4, self.latent_size, bias=bias)
-        self.bn1d = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine)
+        self.fc1 = nn.Linear(128 * 3 * 3, self.latent_size, bias=bias)
+        # self.bn1d = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -154,5 +154,6 @@ class Encoder(nn.Module):
         x = self.conv3(x)
         x = self.pool(F.leaky_relu(self.bn2d3(x)))
         x = x.view(x.size(0), -1)
-        x = self.bn1d(self.fc1(x))
+        x = self.fc1(x)
+        # x = self.bn1d(x)
         return x

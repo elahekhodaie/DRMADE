@@ -1,10 +1,16 @@
 import torch
 from torchvision import datasets
 from pathlib import Path
+from torch.distributions.normal import Normal
+import torch as t
 
 # model architecture
 latent_size = 16
+
+num_mix = 5
+distribution = Normal
 num_dist_parameters = 2
+parameters_transform = [lambda x: x, t.abs]  # mean, std
 
 made_hidden_layers = [24, 24]
 made_use_biases = True
@@ -18,12 +24,13 @@ encoder_bn_eps = 1e-4
 train_sample_num_masks = 16
 test_sample_num_masks = 16
 
-# training
 train_dataset = datasets.MNIST
 normal_classes = [8]
 
+# training
 test_classes = list(range(0, 10))
 test_dataset = datasets.MNIST
+
 # data
 
 # data loader
