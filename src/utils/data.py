@@ -13,14 +13,16 @@ class DatasetSelection(Dataset):
                  dataset=config.train_dataset,
                  root=config.data_dir,
                  train=True,
-                 classes=tuple(range(0, 10)),
+                 classes=None,
                  transform=default_transform,
                  target_transform=lambda x: x,
                  download=True,
                  ):
         self.whole_data = dataset(root, train, transform=transform, target_transform=target_transform,
                                   download=download)
-        self.data = [point for point in self.whole_data if point[1] in classes]
+        self.data = self.whole_data
+        if classes is not None:
+            self.data = [point for point in self.whole_data if point[1] in classes]
 
     def __len__(self):
         return len(self.data)
