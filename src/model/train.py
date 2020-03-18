@@ -133,11 +133,18 @@ def evaluate_loop(epoch):
     with t.no_grad():
         scores = t.Tensor().to(device)
         labels = np.empty(0, dtype=np.int8)
+        time_ = time.time()
         for batch_idx, (images, label) in enumerate(test_loader):
             images = images.to(device)
             output, features = model(images)
             scores = t.cat((scores, model.log_prob_hitmap(features, output).sum(1)), dim=0)
             labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
+            if config.log_evaluation_loop_interval and (batch_idx + 1) % config.log_evaluation_loop_interval == 0:
+                print(
+                    '\t{:3d}/{:3d} - time : {:.3f}s'.format(
+                        batch_idx, len(test_loader), time.time() - time_)
+                )
+                time_ = time.time()
         is_pos = np.isin(labels, [8])
     return scores, is_pos
 
@@ -151,6 +158,7 @@ def train():
 
         writer.add_scalars('loss', {'validation': validation_loss, 'training': train_loss}, epoch)
         writer.add_scalar('auc', roc_auc_score(y_true=is_pos.astype(np.int8), y_score=scores), epoch)
+        writer.add_pr_curve('roc', is_pos, scores, epoch, 1024)
         writer.add_histogram('test/positive-scores', scores[is_pos], epoch)
         writer.add_histogram('test/negative-scores', scores[(is_pos == False)], epoch)
 

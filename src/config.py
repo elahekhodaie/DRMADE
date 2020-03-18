@@ -58,12 +58,11 @@ log_train_loop_interval = 1
 log_validation_loop_interval = 1
 log_evaluation_loop_interval = 1
 
-output_root = '.'
-data_dir = output_root + '/data'  # Location for the dataset
+output_root = './output'
+data_dir = '.' + '/data'  # Location for the dataset
 models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
 runs_dir = output_root + '/runs'
 log_dir = output_root + '/log'
-samples_dir = log_dir + '/samples'
 losses_dir = log_dir + '/losses'
 evaluation_dir = log_dir + '/evaluation'
 extreme_cases_dir = log_dir + '/extreme_cases'
@@ -72,7 +71,6 @@ extreme_cases_dir = log_dir + '/extreme_cases'
 Path(output_root).mkdir(parents=True, exist_ok=True)
 Path(data_dir).mkdir(parents=True, exist_ok=True)
 Path(models_dir).mkdir(parents=True, exist_ok=True)
-Path(samples_dir).mkdir(parents=True, exist_ok=True)
 Path(log_dir).mkdir(parents=True, exist_ok=True)
 Path(evaluation_dir).mkdir(parents=True, exist_ok=True)
 Path(losses_dir).mkdir(parents=True, exist_ok=True)
