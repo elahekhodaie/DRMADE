@@ -21,18 +21,29 @@ encoder_use_bias = False
 encoder_bn_affine = False
 encoder_bn_eps = 1e-4
 
-train_sample_num_masks = 16
-test_sample_num_masks = 16
-
+# training
 train_dataset = datasets.MNIST
 normal_classes = [8]
 
-# training
-test_classes = list(range(0, 10))
+test_classes = None
 test_dataset = datasets.MNIST
 
-# data
+lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
+lr_half_schedule = 400  # interval of epochs to reduce learning rate 50%
+base_lr = 0.0002
 
+noising_factor = 0.1  # the noise to add to each input while training the model
+latent_regularization_factor = 1
+
+max_epoch = 5000
+
+# evaluation
+positive_is_anomaly = False
+
+# Reproducability
+seed = 1  # Random seed to use
+
+# data
 # data loader
 batch_size = 64  # Batch size during training per GPU
 test_batch_size = batch_size
@@ -42,9 +53,15 @@ dataloader_shuffle = True
 dataloader_drop_last = True
 
 # data I/O
+save_interval = 16
+log_train_loop_interval = 1
+log_validation_loop_interval = 1
+log_evaluation_loop_interval = 1
+
 output_root = '.'
 data_dir = output_root + '/data'  # Location for the dataset
 models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
+runs_dir = output_root + '/runs'
 log_dir = output_root + '/log'
 samples_dir = log_dir + '/samples'
 losses_dir = log_dir + '/losses'

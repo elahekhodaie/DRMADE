@@ -28,10 +28,12 @@ class DRMADE(nn.Module):
         self.distribution = distribution
         self.parameters_transform = parameters_transform
         self.made_hidden_layers = made_hidden_layers
+        self.num_masks = num_masks
 
-        self.name = 'DRMADE-l{}-h{}-mix{},{}'.format(
+        self.name = 'DRMADE-ls={}-hl=[{}]-nmasks={}-nmix={}-dist={}'.format(
             self.latent_size,
             ','.join(str(i) for i in made_hidden_layers),
+            self.num_masks,
             self.num_mix,
             self.distribution.__name__,
         ) if not name else name
@@ -61,6 +63,15 @@ class DRMADE(nn.Module):
     def num_parameters(self):
         return sum([np.prod(p.size()) for p in self.parameters()])
 
+    def get_dist_parameters(self, output):
+        parameters = []
+        for z, transform in enumerate(self.parameters_transform):
+            parameters.append(transform(output[:, [j for i in range(self.latent_size) for j in
+                                                   range(i + self.latent_size * self.num_mix * z,
+                                                         self.latent_size * self.num_mix * (z + 1),
+                                                         self.latent_size)]]))
+        return parameters
+
     def log_prob_hitmap(self, x, output=None):
         if output is None:
             output, features = self(x)
@@ -68,13 +79,7 @@ class DRMADE(nn.Module):
             features = x
         features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
 
-        parameters = []
-        for z, transform in enumerate(self.parameters_transform):
-            parameters.append(transform(output[:, [j for i in range(self.latent_size) for j in
-                                                   range(i + self.latent_size * self.num_mix * z,
-                                                         self.latent_size * self.num_mix * (z + 1),
-                                                         self.latent_size)]]))
-
+        parameters = self.get_dist_parameters(output)
         dists = self.distribution(*parameters)
         log_probs_dists = dists.log_prob(features).reshape(-1, self.latent_size, self.num_mix)
         if self.num_mix == 1:
