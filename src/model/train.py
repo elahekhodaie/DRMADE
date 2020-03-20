@@ -110,7 +110,7 @@ def train_loop():
         latent_regularization = model.latent_regularization_term(
             noised_features) if noise_factor else model.latent_regularization_term(features)
 
-        loss = log_prob + latent_regularization_factor * latent_regularization
+        loss = -log_prob + latent_regularization_factor * latent_regularization
         for i, factor in enumerate(config.parameters_regularization_factor):
             loss += factor * parameters_regularization[i]
 
@@ -121,8 +121,8 @@ def train_loop():
         data['loss'] += loss / batch_size
         data['log_prob'] += log_prob / batch_size
         data['latent_regularization'] += latent_regularization / batch_size
-        for i in parameters_regularization:
-            data['parameters_regularization'] += i / num_masks
+        for i, reg in enumerate(parameters_regularization):
+            data['parameters_regularization'][i] += reg / num_masks
 
         if config.log_train_loop_interval and (batch_idx + 1) % config.log_train_loop_interval == 0:
             print(
@@ -174,15 +174,15 @@ def validation_loop():
             latent_regularization = model.latent_regularization_term(
                 noised_features) if noise_factor else model.latent_regularization_term(features)
 
-            loss = log_prob + latent_regularization_factor * latent_regularization
+            loss = -log_prob + latent_regularization_factor * latent_regularization
             for i, factor in enumerate(config.parameters_regularization_factor):
                 loss += factor * parameters_regularization[i]
 
             data['loss'] += loss / batch_size
             data['log_prob'] += log_prob / batch_size
             data['latent_regularization'] += latent_regularization / batch_size
-            for i in parameters_regularization:
-                data['parameters_regularization'] += i / num_masks
+            for i, reg in enumerate(parameters_regularization):
+                data['parameters_regularization'][i] += reg / num_masks
 
             if config.log_validation_loop_interval and (batch_idx + 1) % config.log_validation_loop_interval == 0:
                 print(
