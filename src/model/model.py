@@ -18,6 +18,9 @@ class DRMADE(nn.Module):
             num_dist_parameters=config.num_dist_parameters,
             distribution=config.distribution,
             parameters_transform=config.parameters_transform,
+            parameters_min=config.paramteres_min_value,
+            latent_tanh=config.encoder_tanh_latent,
+            latent_bn=config.encoder_bn_latent,
             name=None,
     ):
         super(DRMADE, self).__init__()
@@ -29,16 +32,24 @@ class DRMADE(nn.Module):
         self.parameters_transform = parameters_transform
         self.made_hidden_layers = made_hidden_layers
         self.num_masks = num_masks
+        self.parameters_min = parameters_min
+        self.latent_tanh = latent_tanh
+        self.latent_bn = latent_bn
 
-        self.name = 'DRMADE-ls={}-hl=[{}]-nmasks={}-nmix={}-dist={}'.format(
+        self.name = 'DRMADE-latent={}{}{}-hl=[{}]-nmasks={}-dist={},nmix={},pmin=[{}]'.format(
+            'tanh' if self.latent_tanh else '',
+            'bn' if self.latent_bn else '',
             self.latent_size,
             ','.join(str(i) for i in made_hidden_layers),
             self.num_masks,
-            self.num_mix,
             self.distribution.__name__,
+            self.num_mix,
+            ','.join(str(i) for i in self.parameters_min),
         ) if not name else name
 
         assert len(self.parameters_transform) == num_dist_parameters
+        assert len(self.parameters_min) == num_dist_parameters
+
         self._feature_perm_indexes = [j for i in range(self.latent_size) for j in
                                       range(i, self.latent_size * self.num_mix, self.latent_size)]
         self._log_mix_coef_perm_indexes = [j for i in range(self.latent_size) for j in
@@ -46,7 +57,7 @@ class DRMADE(nn.Module):
                                                  self.latent_size * self.num_mix * (
                                                          self.num_dist_parameters + 1),
                                                  self.latent_size)]
-        self.encoder = Encoder(num_channels, latent_size)
+        self.encoder = Encoder(num_channels, latent_size, tanh_latent=self.latent_tanh, bn_latent=latent_bn)
         self.made = MADE(
             latent_size,
             made_hidden_layers,
@@ -66,20 +77,26 @@ class DRMADE(nn.Module):
     def get_dist_parameters(self, output):
         parameters = []
         for z, transform in enumerate(self.parameters_transform):
-            parameters.append(transform(output[:, [j for i in range(self.latent_size) for j in
-                                                   range(i + self.latent_size * self.num_mix * z,
-                                                         self.latent_size * self.num_mix * (z + 1),
-                                                         self.latent_size)]]))
+            parameters.append(
+                self.parameters_min[z] + transform(
+                    output[:, [j for i in range(self.latent_size) for j in
+                               range(i + self.latent_size * self.num_mix * z,
+                                     self.latent_size * self.num_mix * (z + 1),
+                                     self.latent_size)]]
+                )
+            )
+
         return parameters
 
-    def log_prob_hitmap(self, x, output=None):
+    def log_prob_hitmap(self, x, output=None, parameters=None):
         if output is None:
-            output, features = self(x)
-        else:
-            features = x
-        features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
+            output = self.made(x)
+        features = x
 
-        parameters = self.get_dist_parameters(output)
+        features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
+        if parameters is None:
+            parameters = self.get_dist_parameters(output)
+
         dists = self.distribution(*parameters)
         log_probs_dists = dists.log_prob(features).reshape(-1, self.latent_size, self.num_mix)
         if self.num_mix == 1:

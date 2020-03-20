@@ -126,12 +126,16 @@ class Encoder(nn.Module):
             latent_size,
             bias=config.encoder_use_bias,
             bn_affine=config.encoder_bn_affine,
-            bn_eps=config.encoder_bn_eps
+            bn_eps=config.encoder_bn_eps,
+            tanh_latent=config.encoder_tanh_latent,
+            bn_latent=config.encoder_bn_latent,
     ):
         super(Encoder, self).__init__()
 
         self.num_input_channels = num_channels
         self.latent_size = latent_size
+        self.tanh_latent = tanh_latent
+        self.bn_latent = bn_latent
 
         self.pool = nn.MaxPool2d(2, 2)
         self.conv1 = nn.Conv2d(self.num_input_channels, 32, 5, bias=bias, padding=2)
@@ -144,7 +148,10 @@ class Encoder(nn.Module):
         nn.init.xavier_uniform_(self.conv3.weight, gain=nn.init.calculate_gain('leaky_relu'))
         self.bn2d3 = nn.BatchNorm2d(128, eps=bn_eps, affine=bn_affine)
         self.fc1 = nn.Linear(128 * 3 * 3, self.latent_size, bias=bias)
-        # self.bn1d = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine)
+        if tanh_latent:
+            nn.init.xavier_uniform_(self.fc1.weight, gain=nn.init.calculate_gain('tanh'))
+        if bn_latent:
+            self.bn1d = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -155,5 +162,8 @@ class Encoder(nn.Module):
         x = self.pool(F.leaky_relu(self.bn2d3(x)))
         x = x.view(x.size(0), -1)
         x = self.fc1(x)
-        # x = self.bn1d(x)
+        if self.tanh_latent:
+            x = torch.tanh(x)
+        if self.bn_latent:
+            x = self.bn1d(x)
         return x

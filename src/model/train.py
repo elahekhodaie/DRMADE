@@ -32,7 +32,7 @@ lr_half_schedule = config.lr_half_schedule
 
 # accessory functions
 noise_function = lambda x: noise_factor * (
-        2 * t.FloatTensor(*x).to(device).uniform_() - 1)  # (x will be the input shape tuple)
+        2 * t.DoubleTensor(*x).to(device).uniform_() - 1)  # (x will be the input shape tuple)
 lr_multiplicative_factor_lambda = lambda epoch: 0.5 if (epoch + 1) % lr_half_schedule == 0 else lr_decay
 
 # reproducibility
@@ -71,96 +71,179 @@ scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lr_multiplicative
                                           last_epoch=-1)
 
 
-def train_loop(epoch):
-    train_loss = 0.0
+def train_loop():
+    data = {
+        'loss': 0.0,
+        'log_prob': 0.0,
+        'latent_regularization': 0.0,
+        'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
+    }
+
     time_ = time.time()
     for batch_idx, (images, _) in enumerate(train_loader):
         images = images.to(device)
         if noise_factor:
             noisy_images = images + noise_function(images.shape)
             noisy_images.clamp_(min=-1, max=1)
+            noised_features = model.encoder(noisy_images)
+        features = model.encoder(images)
 
-        loss = 0.0
+        log_prob = 0.0
+        parameters_regularization = [0.0 for i in range(config.num_dist_parameters)]
         for i in range(num_masks):
             model.made.update_masks()
             if noise_factor:
-                output, noised_features = model(noisy_images)
-                features = model.encoder(images)
+                noised_output = model.made(noised_features)
+                parameters = model.get_dist_parameters(noised_output)
+                log_prob += model.log_prob(features, noised_output, parameters=parameters)
             else:
-                output, features = model(images)
-            loss += -model.log_prob(features, output) + latent_regularization_factor * model.latent_regularization_term(
-                features)
-        loss /= num_masks
+                output = model.made(features)
+                parameters = model.get_dist_parameters(output)
+                log_prob += model.log_prob(features, output=output, parameters=parameters)
+            for j, regularization in enumerate(config.parameters_regularization):
+                parameters_regularization[j] += regularization(parameters[j])
+
+        log_prob /= num_masks
+        for i in range(config.num_dist_parameters):
+            parameters_regularization[i] /= num_masks
+
+        latent_regularization = model.latent_regularization_term(
+            noised_features) if noise_factor else model.latent_regularization_term(features)
+
+        loss = log_prob + latent_regularization_factor * latent_regularization
+        for i, factor in enumerate(config.parameters_regularization_factor):
+            loss += factor * parameters_regularization[i]
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        train_loss += loss / batch_size
+        data['loss'] += loss / batch_size
+        data['log_prob'] += log_prob / batch_size
+        data['latent_regularization'] += latent_regularization / batch_size
+        for i in parameters_regularization:
+            data['parameters_regularization'] += i / num_masks
+
         if config.log_train_loop_interval and (batch_idx + 1) % config.log_train_loop_interval == 0:
             print(
                 '\t{:3d}/{:3d} - loss : {:.4f}, time : {:.3f}s'.format(
-                    batch_idx, len(train_loader), train_loss / (1 + batch_idx), time.time() - time_)
+                    batch_idx, len(train_loader), data['loss'] / (1 + batch_idx), time.time() - time_)
             )
             time_ = time.time()
-    return train_loss / len(train_loader)
+        for key in data:
+            if isinstance(data[key], list):
+                for i in range(len(data[key])):
+                    data[key][i] /= len(train_loader)
+            else:
+                data[key] /= len(train_loader)
+    return data
 
 
-def validation_loop(epoch):
-    validation_loss = 0.0
-    time_ = time()
+def validation_loop():
+    data = {
+        'loss': 0.0,
+        'log_prob': 0.0,
+        'latent_regularization': 0.0,
+        'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
+    }
+
+    time_ = time.time()
     with t.no_grad():
-        for batch_idx, (images, _) in enumerate(validation_loader):
+        for batch_idx, (images, _) in enumerate(train_loader):
             images = images.to(device)
-            loss = 0.0
+            if noise_factor:
+                noisy_images = images + noise_function(images.shape)
+                noisy_images.clamp_(min=-1, max=1)
+                noised_features = model.encoder(noisy_images)
+            features = model.encoder(images)
+
+            log_prob = 0.0
+            parameters_regularization = [0.0 for i in range(config.num_dist_parameters)]
             for i in range(num_masks):
                 model.made.update_masks()
-                output, features = model(images)
-                loss += -model.log_prob(features,
-                                        output) + latent_regularization_factor * model.latent_regularization_term(
-                    features)
-            loss /= num_masks
-            validation_loss += loss / batch_size
+                output = model.made(features)
+                parameters = model.get_dist_parameters(output)
+                log_prob += model.log_prob(features, output=output, parameters=parameters)
+                for j, regularization in enumerate(config.parameters_regularization):
+                    parameters_regularization[j] += regularization(parameters[j])
+
+            log_prob /= num_masks
+            for i in range(config.num_dist_parameters):
+                parameters_regularization[i] /= num_masks
+
+            latent_regularization = model.latent_regularization_term(
+                noised_features) if noise_factor else model.latent_regularization_term(features)
+
+            loss = log_prob + latent_regularization_factor * latent_regularization
+            for i, factor in enumerate(config.parameters_regularization_factor):
+                loss += factor * parameters_regularization[i]
+
+            data['loss'] += loss / batch_size
+            data['log_prob'] += log_prob / batch_size
+            data['latent_regularization'] += latent_regularization / batch_size
+            for i in parameters_regularization:
+                data['parameters_regularization'] += i / num_masks
+
             if config.log_validation_loop_interval and (batch_idx + 1) % config.log_validation_loop_interval == 0:
                 print(
                     '\t{:3d}/{:3d} - loss : {:.4f}, time : {:.3f}s'.format(
-                        batch_idx, len(validation_loader), validation_loss / (1 + batch_idx), time.time() - time_)
+                        batch_idx, len(train_loader), data['loss'] / (1 + batch_idx), time.time() - time_)
                 )
                 time_ = time.time()
-    return validation_loss / len(validation_loader)
+        for key in data:
+            if isinstance(data[key], list):
+                for i in range(len(data[key])):
+                    data[key][i] /= len(train_loader)
+            else:
+                data[key] /= len(train_loader)
+    return data
 
 
-def evaluate_loop(epoch):
+def evaluate_loop(data_loader):
     with t.no_grad():
         scores = t.Tensor().to(device)
+        features = t.Tensor().to(device)
         labels = np.empty(0, dtype=np.int8)
         time_ = time.time()
-        for batch_idx, (images, label) in enumerate(test_loader):
+        for batch_idx, (images, label) in enumerate(data_loader):
             images = images.to(device)
-            output, features = model(images)
-            scores = t.cat((scores, model.log_prob_hitmap(features, output).sum(1)), dim=0)
+            output, latent = model(images)
+            scores = t.cat((scores, model.log_prob_hitmap(latent, output).sum(1)), dim=0)
+            features = t.cat((features, latent), dim=0)
             labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
             if config.log_evaluation_loop_interval and (batch_idx + 1) % config.log_evaluation_loop_interval == 0:
                 print(
                     '\t{:3d}/{:3d} - time : {:.3f}s'.format(
-                        batch_idx, len(test_loader), time.time() - time_)
+                        batch_idx, len(data_loader), time.time() - time_)
                 )
                 time_ = time.time()
-        is_pos = np.isin(labels, [8])
-    return scores, is_pos
+    return scores, features, labels
+
+
+def submit_loop_data(data, title, epoch):
+    for key in data:
+        if isinstance(data[key], list):
+            for i in range(len(data[key])):
+                writer.add_scalar(f'{key}/{title}/{i}', data[key][i], epoch)
+        else:
+            writer.add_scalar(f'{key}/{title}', data[key], epoch)
 
 
 def train():
     for epoch in range(config.max_epoch):
         print('epoch {:4} - lr: {}'.format(epoch, optimizer.param_groups[0]["lr"]))
-        validation_loss = validation_loop(epoch)
-        scores, is_pos = evaluate_loop(epoch)
-        train_loss = train_loop(epoch)
+        if config.validation_interval and (epoch + 1) % config.validation_interval == 0:
+            validation_results = validation_loop()
+            submit_loop_data(validation_results, 'validation', epoch)
+        if config.evaluation_interval and (epoch + 1) % config.evaluation_interval == 0:
+            scores, features, labels = evaluate_loop(test_loader)
+            writer.add_scalar('auc', roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                                                   y_score=scores.cpu()), epoch)
 
-        writer.add_scalars('loss', {'validation': validation_loss, 'training': train_loss}, epoch)
-        writer.add_scalar('auc', roc_auc_score(y_true=is_pos.astype(np.int8), y_score=scores), epoch)
-        writer.add_pr_curve('roc', is_pos, scores, epoch, 1024)
-        writer.add_histogram('test/positive-scores', scores[is_pos], epoch)
-        writer.add_histogram('test/negative-scores', scores[(is_pos == False)], epoch)
+        train_results = train_loop()
+        submit_loop_data(train_results, 'train', epoch)
+        scheduler.step()
 
+        writer.flush()
         if config.save_interval and (epoch + 1) % config.save_interval == 0:
             model.save(config.models_dir + f'/{model_name}-E{epoch}.pth')

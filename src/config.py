@@ -7,19 +7,23 @@ import torch as t
 # model architecture
 latent_size = 16
 
+made_hidden_layers = [24, 24]
+made_num_masks = 16
+made_use_biases = True
+made_natural_ordering = True
+
 num_mix = 5
 distribution = Normal
 num_dist_parameters = 2
-parameters_transform = [lambda x: x, t.abs]  # mean, std
-
-made_hidden_layers = [24, 24]
-made_use_biases = True
-made_num_masks = 16
-made_natural_ordering = True
+parameters_transform = [lambda x: x, t.exp]  # mean, std
+paramteres_min_value = [0.0, 1.0]
+parameters_regularization = [lambda x: 0, lambda x: t.sum(1 / x)]
 
 encoder_use_bias = False
 encoder_bn_affine = False
 encoder_bn_eps = 1e-4
+encoder_tanh_latent = False
+encoder_bn_latent = False
 
 # training
 train_dataset = datasets.MNIST
@@ -34,6 +38,7 @@ base_lr = 0.0002
 
 noising_factor = 0.1  # the noise to add to each input while training the model
 latent_regularization_factor = 1
+parameters_regularization_factor = [0, 1]
 
 max_epoch = 5000
 
@@ -54,6 +59,8 @@ dataloader_drop_last = True
 
 # data I/O
 save_interval = 16
+validation_interval = 16
+evaluation_interval = 8
 log_train_loop_interval = 1
 log_validation_loop_interval = 1
 log_evaluation_loop_interval = 1
