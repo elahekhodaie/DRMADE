@@ -7,7 +7,7 @@ import torch as t
 # model architecture
 latent_size = 16
 
-made_hidden_layers = [24, 24]
+made_hidden_layers = [64, 64, 64]
 made_num_masks = 16
 made_use_biases = True
 made_natural_ordering = True
@@ -50,7 +50,7 @@ seed = 1  # Random seed to use
 
 # data
 # data loader
-batch_size = 64  # Batch size during training per GPU
+batch_size = 2048  # Batch size during training per GPU
 test_batch_size = batch_size
 dataloader_num_workers = 4
 dataloader_pin_memory = True
@@ -59,26 +59,35 @@ dataloader_drop_last = True
 
 # data I/O
 save_interval = 16
-validation_interval = 16
-evaluation_interval = 8
-log_train_loop_interval = 1
-log_validation_loop_interval = 1
-log_evaluation_loop_interval = 1
+validation_interval = 1
+evaluation_interval = 1
+log_train_loop_interval = 16
+log_validation_loop_interval = 16
+log_evaluation_loop_interval = 16
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset
 models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
 runs_dir = output_root + '/runs'
 log_dir = output_root + '/log'
-losses_dir = log_dir + '/losses'
-evaluation_dir = log_dir + '/evaluation'
-extreme_cases_dir = log_dir + '/extreme_cases'
 
-# ensuring the existance of output directories
-Path(output_root).mkdir(parents=True, exist_ok=True)
-Path(data_dir).mkdir(parents=True, exist_ok=True)
-Path(models_dir).mkdir(parents=True, exist_ok=True)
-Path(log_dir).mkdir(parents=True, exist_ok=True)
-Path(evaluation_dir).mkdir(parents=True, exist_ok=True)
-Path(losses_dir).mkdir(parents=True, exist_ok=True)
-Path(extreme_cases_dir).mkdir(parents=True, exist_ok=True)
+
+def set_output_dirs(root='./output'):
+    global output_root, data_dir, models_dir, runs_dir, log_dir
+    output_root = root
+    data_dir = '.' + '/data'  # Location for the dataset
+    models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
+    runs_dir = output_root + '/runs'
+    log_dir = output_root + '/log'
+    # losses_dir = log_dir + '/losses'
+    # evaluation_dir = log_dir + '/evaluation'
+    # extreme_cases_dir = log_dir + '/extreme_cases'
+
+    # ensuring the existance of output directories
+    Path(output_root).mkdir(parents=True, exist_ok=True)
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    Path(models_dir).mkdir(parents=True, exist_ok=True)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    # Path(evaluation_dir).mkdir(parents=True, exist_ok=True)
+    # Path(losses_dir).mkdir(parents=True, exist_ok=True)
+    # Path(extreme_cases_dir).mkdir(parents=True, exist_ok=True)

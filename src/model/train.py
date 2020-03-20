@@ -57,7 +57,9 @@ validation_loader = validation_data.get_dataloader(shuffle=False)
 test_loader = test_data.get_dataloader(shuffle=False, )
 
 print('initializing model')
-model = DRMADE(input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix)
+model = DRMADE(input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix).to(device)
+model.encoder = model.encoder.to(device)
+model.made = model.made.to(device)
 
 # setting up tensorboard data summerizer
 model_name = f'{model.name}-rl={latent_regularization_factor}-nz={noise_factor}-Adam,lr={base_lr},dc={lr_decay},s={lr_half_schedule}'
