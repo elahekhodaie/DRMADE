@@ -201,14 +201,18 @@ def validation_loop():
     return data
 
 
-def evaluate_loop(data_loader):
+def evaluate_loop(data_loader, record_input_images=False):
     with t.no_grad():
         scores = t.Tensor().to(device)
         features = t.Tensor().to(device)
         labels = np.empty(0, dtype=np.int8)
+        input_images = t.Tensor().to(device)
         time_ = time.time()
         for batch_idx, (images, label) in enumerate(data_loader):
             images = images.to(device)
+            if record_input_images:
+                input_images = t.cat((input_images, images), dim=0)
+
             output, latent = model(images)
             scores = t.cat((scores, model.log_prob_hitmap(latent, output).sum(1)), dim=0)
             features = t.cat((features, latent), dim=0)
@@ -219,7 +223,7 @@ def evaluate_loop(data_loader):
                         batch_idx, len(data_loader), time.time() - time_)
                 )
                 time_ = time.time()
-    return scores, features, labels
+    return scores, features, labels, input_images
 
 
 def submit_loop_data(data, title, epoch):
@@ -231,21 +235,43 @@ def submit_loop_data(data, title, epoch):
             writer.add_scalar(f'{key}/{title}', data[key], epoch)
 
 
+def submit_encoder_weights(epoch):
+    writer.add_histogram('encoder/conv1', model.encoder.conv1.weight, epoch)
+    writer.add_histogram('encoder/conv2', model.encoder.conv2.weight, epoch)
+    writer.add_histogram('encoder/conv3', model.encoder.conv3.weight, epoch)
+    writer.add_histogram('encoder/fc1', model.encoder.fc1.weight, epoch)
+
+
 def train():
     for epoch in range(config.max_epoch):
         print('epoch {:4} - lr: {}'.format(epoch, optimizer.param_groups[0]["lr"]))
-        if config.validation_interval and (epoch + 1) % config.validation_interval == 0:
+        if config.validation_interval and epoch % config.validation_interval == 0:
             validation_results = validation_loop()
             submit_loop_data(validation_results, 'validation', epoch)
-        if config.evaluation_interval and (epoch + 1) % config.evaluation_interval == 0:
-            scores, features, labels = evaluate_loop(test_loader)
+
+        if config.evaluation_interval and epoch % config.evaluation_interval == 0:
+            scores, features, labels, _ = evaluate_loop(test_loader)
             writer.add_scalar('auc', roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
                                                    y_score=scores.cpu()), epoch)
+            writer.add_histogram('log_probs/anomaly', scores, epoch)
+            scores, features, labels, _ = evaluate_loop(train_loader)
+            writer.add_histogram('log_probs/normal', scores, epoch)
+            writer.flush()
+
+        if config.embedding_interval and (epoch + 1) % config.embedding_interval == 0:
+            scores, features, labels, input_images = evaluate_loop(test_loader, record_input_images=True)
+            writer.add_embedding(features, metadata=labels, label_img=input_images, global_step=epoch,
+                                 tag=f'{model_name}/test')
+            writer.flush()
+
+        if config.track_weights_interval and epoch % config.track_weights_interval == 0:
+            submit_encoder_weights(epoch)
 
         train_results = train_loop()
         submit_loop_data(train_results, 'train', epoch)
+
+        writer.add_scalar('learning rate', optimizer.param_groups[0]["lr"], epoch)
         scheduler.step()
 
-        writer.flush()
         if config.save_interval and (epoch + 1) % config.save_interval == 0:
             model.save(config.models_dir + f'/{model_name}-E{epoch}.pth')

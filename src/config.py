@@ -50,7 +50,7 @@ seed = 1  # Random seed to use
 
 # data
 # data loader
-batch_size = 2048  # Batch size during training per GPU
+batch_size = 512  # Batch size during training per GPU
 test_batch_size = batch_size
 dataloader_num_workers = 4
 dataloader_pin_memory = True
@@ -59,11 +59,13 @@ dataloader_drop_last = True
 
 # data I/O
 save_interval = 16
-validation_interval = 1
-evaluation_interval = 1
-log_train_loop_interval = 16
-log_validation_loop_interval = 16
-log_evaluation_loop_interval = 16
+validation_interval = 16
+evaluation_interval = 16
+embedding_interval = 512
+track_weights_interval = 64
+log_train_loop_interval = 8
+log_validation_loop_interval = 8
+log_evaluation_loop_interval = 8
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset

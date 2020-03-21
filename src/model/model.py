@@ -115,7 +115,7 @@ class DRMADE(nn.Module):
 
     def latent_regularization_term(self, features):
         norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
-        return (norm_features @ norm_features.reshape(self.latent_size, -1)).sum()
+        return (t.abs(norm_features @ norm_features.reshape(self.latent_size, -1))).sum()
 
     def save(self, path):
         t.save(self.state_dict(), path)
