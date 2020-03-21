@@ -41,6 +41,7 @@ latent_cor_regularization_factor = 0.01
 latent_cor_regularization_abs = False
 latent_zero_regularization_factor = 0.01
 latent_zero_regularization_eps = 1e-3
+latent_variance_regularization_factor = 0.1
 parameters_regularization_factor = [0, 1]
 
 max_epoch = 5121

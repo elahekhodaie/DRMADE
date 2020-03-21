@@ -123,6 +123,9 @@ class DRMADE(nn.Module):
     def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
         return t.sum(1.0 / (eps + t.abs(features)))
 
+    def latent_var_regularization(self, features):
+        return t.sum(((features - features.sum(1, keepdim=True) / self.latent_size) ** 2).sum(1) / self.latent_size)
+
     def save(self, path):
         t.save(self.state_dict(), path)
 

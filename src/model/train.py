@@ -25,6 +25,7 @@ latent_size = config.latent_size
 
 latent_cor_regularization_factor = config.latent_cor_regularization_factor
 latent_zero_regularization_factor = config.latent_zero_regularization_factor
+latent_variance_regularization_factor = config.latent_variance_regularization_factor
 
 noise_factor = config.noising_factor
 
@@ -91,6 +92,7 @@ def train_loop():
         'log_prob': 0.0,
         'latent_regularization/correlation': 0.0,
         'latent_regularization/zero': 0.0,
+        'latent_regularization/variance': 0.0,
         'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
     }
 
@@ -125,10 +127,16 @@ def train_loop():
         latent_cor_regularization = model.latent_cor_regularization(
             noised_features) if noise_factor else model.latent_cor_regularization(features)
 
+        latent_var_regularization = model.latent_var_regularization(
+            noised_features) if noise_factor else model.latent_var_regularization(features)
+
         latent_zero_regularization = model.latent_zero_regularization(
             noised_features) if noise_factor else model.latent_zero_regularization(features)
 
-        loss = -log_prob + latent_cor_regularization_factor * latent_cor_regularization + latent_zero_regularization_factor * latent_zero_regularization
+        loss = -log_prob + latent_cor_regularization_factor * latent_cor_regularization + \
+               latent_zero_regularization_factor * latent_zero_regularization + \
+               -latent_variance_regularization_factor * latent_var_regularization
+
         for i, factor in enumerate(config.parameters_regularization_factor):
             loss += factor * parameters_regularization[i]
 
@@ -140,6 +148,7 @@ def train_loop():
         data['log_prob'] += log_prob / batch_size
         data['latent_regularization/correlation'] += latent_cor_regularization / batch_size
         data['latent_regularization/zero'] += latent_zero_regularization / batch_size
+        data['latent_regularization/variance'] += latent_var_regularization / batch_size
         for i, reg in enumerate(parameters_regularization):
             data['parameters_regularization'][i] += reg / num_masks
 
@@ -164,6 +173,7 @@ def validation_loop():
         'log_prob': 0.0,
         'latent_regularization/correlation': 0.0,
         'latent_regularization/zero': 0.0,
+        'latent_regularization/variance': 0.0,
         'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
     }
 
@@ -194,11 +204,16 @@ def validation_loop():
             latent_cor_regularization = model.latent_cor_regularization(
                 noised_features) if noise_factor else model.latent_cor_regularization(features)
 
+            latent_var_regularization = model.latent_var_regularization(
+                noised_features) if noise_factor else model.latent_var_regularization(features)
+
             latent_zero_regularization = model.latent_zero_regularization(
                 noised_features) if noise_factor else model.latent_zero_regularization(features)
 
             loss = -log_prob + latent_cor_regularization_factor * latent_cor_regularization + \
-                   latent_zero_regularization_factor * latent_zero_regularization
+                   latent_zero_regularization_factor * latent_zero_regularization + \
+                   -latent_variance_regularization_factor * latent_var_regularization
+
             for i, factor in enumerate(config.parameters_regularization_factor):
                 loss += factor * parameters_regularization[i]
 
@@ -206,9 +221,10 @@ def validation_loop():
             data['log_prob'] += log_prob / batch_size
             data['latent_regularization/correlation'] += latent_cor_regularization / batch_size
             data['latent_regularization/zero'] += latent_zero_regularization / batch_size
+            data['latent_regularization/variance'] += latent_var_regularization / batch_size
+
             for i, reg in enumerate(parameters_regularization):
                 data['parameters_regularization'][i] += reg / num_masks
-
             if config.log_validation_loop_interval and (batch_idx + 1) % config.log_validation_loop_interval == 0:
                 print(
                     '\t{:3d}/{:3d} - loss : {:.4f}, time : {:.3f}s'.format(
