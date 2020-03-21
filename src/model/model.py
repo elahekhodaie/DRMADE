@@ -113,9 +113,15 @@ class DRMADE(nn.Module):
     def log_prob(self, *args, **kwargs):
         return t.sum(self.log_prob_hitmap(*args, **kwargs))
 
-    def latent_regularization_term(self, features):
+    def latent_cor_regularization(self, features):
         norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
-        return (t.abs(norm_features @ norm_features.reshape(self.latent_size, -1))).sum()
+        correlations = t.abs(norm_features @ norm_features.reshape(self.latent_size, -1))
+        if config.latent_cor_regularization_abs:
+            return (t.abs(correlations)).sum()
+        return (correlations).sum()
+
+    def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
+        return t.sum(1.0 / (eps + t.abs(features)))
 
     def save(self, path):
         t.save(self.state_dict(), path)

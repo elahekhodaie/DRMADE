@@ -37,10 +37,13 @@ lr_half_schedule = 400  # interval of epochs to reduce learning rate 50%
 base_lr = 0.0002
 
 noising_factor = 0.1  # the noise to add to each input while training the model
-latent_regularization_factor = 1
+latent_cor_regularization_factor = 0.01
+latent_cor_regularization_abs = False
+latent_zero_regularization_factor = 0.01
+latent_zero_regularization_eps = 1e-3
 parameters_regularization_factor = [0, 1]
 
-max_epoch = 5000
+max_epoch = 5121
 
 # evaluation
 positive_is_anomaly = False

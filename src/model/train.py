@@ -23,7 +23,9 @@ num_masks = config.made_num_masks
 num_mix = config.num_mix
 latent_size = config.latent_size
 
-latent_regularization_factor = config.latent_regularization_factor
+latent_cor_regularization_factor = config.latent_cor_regularization_factor
+latent_zero_regularization_factor = config.latent_zero_regularization_factor
+
 noise_factor = config.noising_factor
 
 base_lr = config.base_lr
@@ -52,9 +54,9 @@ test_data = DatasetSelection(datasets.MNIST, train=False)
 input_shape = train_data.input_shape()
 
 print('initializing data loaders')
-train_loader = train_data.get_dataloader(shuffle=True)
-validation_loader = validation_data.get_dataloader(shuffle=False)
-test_loader = test_data.get_dataloader(shuffle=False, )
+train_loader = train_data.get_dataloader(shuffle=True, batch_size=batch_size)
+validation_loader = validation_data.get_dataloader(shuffle=False, batch_size=batch_size)
+test_loader = test_data.get_dataloader(shuffle=False, batch_size=test_batch_size)
 
 print('initializing model')
 model = DRMADE(input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix).to(device)
@@ -62,7 +64,17 @@ model.encoder = model.encoder.to(device)
 model.made = model.made.to(device)
 
 # setting up tensorboard data summerizer
-model_name = f'{model.name}-rl={latent_regularization_factor}-nz={noise_factor}-Adam,lr={base_lr},dc={lr_decay},s={lr_half_schedule}'
+model_name = '{}-rl_cor={}{}-rl_zero={}eps{}-nz={}-Adam,lr={},dc={},s={}'.format(
+    model.name,
+    "abs" if config.latent_cor_regularization_abs else "noabs",
+    latent_cor_regularization_factor,
+    latent_zero_regularization_factor,
+    config.latent_zero_regularization_eps,
+    noise_factor,
+    base_lr,
+    lr_decay,
+    lr_half_schedule
+)
 writer = SummaryWriter(
     log_dir=config.runs_dir + f'/{model_name}')
 
@@ -77,7 +89,8 @@ def train_loop():
     data = {
         'loss': 0.0,
         'log_prob': 0.0,
-        'latent_regularization': 0.0,
+        'latent_regularization/correlation': 0.0,
+        'latent_regularization/zero': 0.0,
         'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
     }
 
@@ -109,10 +122,13 @@ def train_loop():
         for i in range(config.num_dist_parameters):
             parameters_regularization[i] /= num_masks
 
-        latent_regularization = model.latent_regularization_term(
-            noised_features) if noise_factor else model.latent_regularization_term(features)
+        latent_cor_regularization = model.latent_cor_regularization(
+            noised_features) if noise_factor else model.latent_cor_regularization(features)
 
-        loss = -log_prob + latent_regularization_factor * latent_regularization
+        latent_zero_regularization = model.latent_zero_regularization(
+            noised_features) if noise_factor else model.latent_zero_regularization(features)
+
+        loss = -log_prob + latent_cor_regularization_factor * latent_cor_regularization + latent_zero_regularization_factor * latent_zero_regularization
         for i, factor in enumerate(config.parameters_regularization_factor):
             loss += factor * parameters_regularization[i]
 
@@ -122,7 +138,8 @@ def train_loop():
 
         data['loss'] += loss / batch_size
         data['log_prob'] += log_prob / batch_size
-        data['latent_regularization'] += latent_regularization / batch_size
+        data['latent_regularization/correlation'] += latent_cor_regularization / batch_size
+        data['latent_regularization/zero'] += latent_zero_regularization / batch_size
         for i, reg in enumerate(parameters_regularization):
             data['parameters_regularization'][i] += reg / num_masks
 
@@ -145,7 +162,8 @@ def validation_loop():
     data = {
         'loss': 0.0,
         'log_prob': 0.0,
-        'latent_regularization': 0.0,
+        'latent_regularization/correlation': 0.0,
+        'latent_regularization/zero': 0.0,
         'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
     }
 
@@ -173,16 +191,21 @@ def validation_loop():
             for i in range(config.num_dist_parameters):
                 parameters_regularization[i] /= num_masks
 
-            latent_regularization = model.latent_regularization_term(
-                noised_features) if noise_factor else model.latent_regularization_term(features)
+            latent_cor_regularization = model.latent_cor_regularization(
+                noised_features) if noise_factor else model.latent_cor_regularization(features)
 
-            loss = -log_prob + latent_regularization_factor * latent_regularization
+            latent_zero_regularization = model.latent_zero_regularization(
+                noised_features) if noise_factor else model.latent_zero_regularization(features)
+
+            loss = -log_prob + latent_cor_regularization_factor * latent_cor_regularization + \
+                   latent_zero_regularization_factor * latent_zero_regularization
             for i, factor in enumerate(config.parameters_regularization_factor):
                 loss += factor * parameters_regularization[i]
 
             data['loss'] += loss / batch_size
             data['log_prob'] += log_prob / batch_size
-            data['latent_regularization'] += latent_regularization / batch_size
+            data['latent_regularization/correlation'] += latent_cor_regularization / batch_size
+            data['latent_regularization/zero'] += latent_zero_regularization / batch_size
             for i, reg in enumerate(parameters_regularization):
                 data['parameters_regularization'][i] += reg / num_masks
 
@@ -243,7 +266,7 @@ def submit_encoder_weights(epoch):
 
 
 def train():
-    for epoch in range(config.max_epoch):
+    for epoch in range(5121):
         print('epoch {:4} - lr: {}'.format(epoch, optimizer.param_groups[0]["lr"]))
         if config.validation_interval and epoch % config.validation_interval == 0:
             validation_results = validation_loop()
@@ -253,7 +276,7 @@ def train():
             scores, features, labels, _ = evaluate_loop(test_loader)
             writer.add_scalar('auc', roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
                                                    y_score=scores.cpu()), epoch)
-            writer.add_histogram('log_probs/anomaly', scores, epoch)
+            writer.add_histogram('log_probs/anomaly', scores[(np.isin(labels, config.normal_classes) == False)], epoch)
             scores, features, labels, _ = evaluate_loop(train_loader)
             writer.add_histogram('log_probs/normal', scores, epoch)
             writer.flush()
@@ -270,7 +293,7 @@ def train():
         train_results = train_loop()
         submit_loop_data(train_results, 'train', epoch)
 
-        writer.add_scalar('learning rate', optimizer.param_groups[0]["lr"], epoch)
+        writer.add_scalar('learning_rate', optimizer.param_groups[0]["lr"], epoch)
         scheduler.step()
 
         if config.save_interval and (epoch + 1) % config.save_interval == 0:
