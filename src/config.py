@@ -16,7 +16,7 @@ num_mix = 5
 distribution = Normal
 num_dist_parameters = 2
 parameters_transform = [lambda x: x, t.exp]  # mean, std
-paramteres_min_value = [0.0, 1.0]
+paramteres_min_value = [0.0, 0.5]
 parameters_regularization = [lambda x: 0, lambda x: t.sum(1 / x)]
 
 encoder_use_bias = False
@@ -33,18 +33,21 @@ test_classes = None
 test_dataset = datasets.MNIST
 
 lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
-lr_half_schedule = 400  # interval of epochs to reduce learning rate 50%
+lr_half_schedule = 512  # interval of epochs to reduce learning rate 50%
 base_lr = 0.0002
 
-noising_factor = 0.1  # the noise to add to each input while training the model
+noising_factor = 0  # the noise to add to each input while training the model
 latent_cor_regularization_factor = 0.01
 latent_cor_regularization_abs = False
 latent_zero_regularization_factor = 0.01
 latent_zero_regularization_eps = 1e-3
 latent_variance_regularization_factor = 0.1
+latent_distance_regularization_factor = 0.1
+latent_distance_normalize_features = False
+latent_distance_norm = 2
 parameters_regularization_factor = [0, 1]
 
-max_epoch = 5121
+max_epoch = 2050
 
 # evaluation
 positive_is_anomaly = False
@@ -65,10 +68,9 @@ dataloader_drop_last = True
 save_interval = 16
 validation_interval = 16
 evaluation_interval = 16
-embedding_interval = 512
+embedding_interval = 1024
 track_weights_interval = 64
-log_train_loop_interval = 8
-log_validation_loop_interval = 8
+log_data_feed_loop_interval = 8
 log_evaluation_loop_interval = 8
 
 output_root = './output'

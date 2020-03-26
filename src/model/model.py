@@ -115,10 +115,21 @@ class DRMADE(nn.Module):
 
     def latent_cor_regularization(self, features):
         norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
-        correlations = t.abs(norm_features @ norm_features.reshape(self.latent_size, -1))
+        correlations = norm_features @ norm_features.reshape(self.latent_size, -1)
         if config.latent_cor_regularization_abs:
             return (t.abs(correlations)).sum()
-        return (correlations).sum()
+        return correlations.sum()
+
+    def latent_distance_regularization(
+            self, features, use_norm=config.latent_distance_normalize_features, norm=config.latent_distance_norm
+    ):
+        batch_size = features.shape[0]
+        vec = features
+        if use_norm:
+            vec = features / ((features ** norm).sum(1, keepdim=True) ** (1 / norm)).repeat(1, self.latent_size)
+        a = vec.repeat(1, batch_size).reshape(-1, batch_size, self.latent_size)
+        b = vec.repeat(batch_size, 1).reshape(-1, batch_size, self.latent_size)
+        return (1 / ((t.abs(a - b) ** norm + 1).sum(2) ** (1 / norm))).sum()
 
     def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
         return t.sum(1.0 / (eps + t.abs(features)))
