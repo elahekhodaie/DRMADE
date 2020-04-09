@@ -33,7 +33,7 @@ class DatasetSelection(Dataset):
     def input_shape(self):
         return self.data[0][0].shape
 
-    def get_dataloader(self, batch_size=config.batch_size,
+    def get_dataloader(self, batch_size,
                        shuffle=config.dataloader_shuffle,
                        num_workers=config.dataloader_num_workers,
                        pin_memory=config.dataloader_pin_memory,

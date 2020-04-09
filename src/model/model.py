@@ -2,13 +2,14 @@ import numpy as np
 
 import torch as t
 import torch.nn as nn
-from src.model.layers import Encoder, MADE
+from src.model.layers import Encoder, MADE, Decoder
 import src.config as config
 
 
 class DRMADE(nn.Module):
     def __init__(
             self,
+            input_size,
             num_channels,
             latent_size,
             made_hidden_layers=config.made_hidden_layers,
@@ -19,123 +20,62 @@ class DRMADE(nn.Module):
             distribution=config.distribution,
             parameters_transform=config.parameters_transform,
             parameters_min=config.paramteres_min_value,
-            latent_tanh=config.encoder_tanh_latent,
-            latent_bn=config.encoder_bn_latent,
+            encoder_num_layers=config.encoder_num_layers,
+            encoder_layers_activation=config.encoder_layers_activation,
+            encoder_latent_activation=config.encoder_latent_activation,
+            encoder_latent_bn=config.encoder_bn_latent,
+            decoder_num_layers=config.decoder_num_layers,
+            decoder_layers_activation=config.decoder_layers_activation,
+            decoder_output_activation=config.decoder_output_activation,
             name=None,
     ):
         super(DRMADE, self).__init__()
 
-        self.latent_size = latent_size
-        self.num_dist_parameters = num_dist_parameters
-        self.num_mix = num_mix
-        self.distribution = distribution
-        self.parameters_transform = parameters_transform
-        self.made_hidden_layers = made_hidden_layers
-        self.num_masks = num_masks
-        self.parameters_min = parameters_min
-        self.latent_tanh = latent_tanh
-        self.latent_bn = latent_bn
+        assert len(parameters_transform) == num_dist_parameters, 'wrong number of parameter transofrms'
+        assert len(parameters_min) == num_dist_parameters, 'wrong number of parameter minimum'
 
-        self.name = 'DRMADE-latent={}{}{}-hl=[{}]-nmasks={}-dist={},nmix={},pmin=[{}]'.format(
-            'tanh' if self.latent_tanh else '',
-            'bn' if self.latent_bn else '',
-            self.latent_size,
-            ','.join(str(i) for i in made_hidden_layers),
-            self.num_masks,
-            self.distribution.__name__,
-            self.num_mix,
-            ','.join(str(i) for i in self.parameters_min),
-        ) if not name else name
-
-        assert len(self.parameters_transform) == num_dist_parameters
-        assert len(self.parameters_min) == num_dist_parameters
-
-        self._feature_perm_indexes = [j for i in range(self.latent_size) for j in
-                                      range(i, self.latent_size * self.num_mix, self.latent_size)]
-        self._log_mix_coef_perm_indexes = [j for i in range(self.latent_size) for j in
-                                           range(i + self.latent_size * self.num_mix * self.num_dist_parameters,
-                                                 self.latent_size * self.num_mix * (
-                                                         self.num_dist_parameters + 1),
-                                                 self.latent_size)]
-        self.encoder = Encoder(num_channels, latent_size, tanh_latent=self.latent_tanh, bn_latent=latent_bn)
+        self.encoder = Encoder(
+            num_channels=num_channels,
+            latent_size=latent_size,
+            input_size=input_size,
+            num_layers=encoder_num_layers,
+            layers_activation=encoder_layers_activation,
+            latent_activation=encoder_latent_activation,
+            bn_latent=encoder_latent_bn,
+        )
+        self.decoder = Decoder(
+            num_channels=num_channels,
+            latent_size=latent_size,
+            output_size=input_size,
+            num_layers=decoder_num_layers,
+            layers_activation=decoder_layers_activation,
+            output_activation=decoder_output_activation,
+        )
         self.made = MADE(
             latent_size,
             made_hidden_layers,
             latent_size * (num_dist_parameters if num_mix == 1 else 1 + num_dist_parameters) * num_mix,
             num_masks,
-            natural_ordering=made_natural_ordering
+            natural_ordering=made_natural_ordering,
+            num_dist_parameters=num_dist_parameters,
+            distribution=distribution,
+            parameters_transform=parameters_transform,
+            parameters_min=parameters_min,
+            num_mix=num_mix,
         )
+
+        self.name = 'DRMADE:{}:{}:{}'.format(
+            self.encoder.name, self.made.name, self.decoder.name
+        ) if not name else name
 
     def forward(self, x):
         features = self.encoder(x)
+        output_image = self.decoder(features)
         output = self.made(features)
-        return output, features
+        return output, features, output_image
 
     def num_parameters(self):
         return sum([np.prod(p.size()) for p in self.parameters()])
-
-    def get_dist_parameters(self, output):
-        parameters = []
-        for z, transform in enumerate(self.parameters_transform):
-            parameters.append(
-                self.parameters_min[z] + transform(
-                    output[:, [j for i in range(self.latent_size) for j in
-                               range(i + self.latent_size * self.num_mix * z,
-                                     self.latent_size * self.num_mix * (z + 1),
-                                     self.latent_size)]]
-                )
-            )
-
-        return parameters
-
-    def log_prob_hitmap(self, x, output=None, parameters=None):
-        if output is None:
-            output = self.made(x)
-        features = x
-
-        features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
-        if parameters is None:
-            parameters = self.get_dist_parameters(output)
-
-        dists = self.distribution(*parameters)
-        log_probs_dists = dists.log_prob(features).reshape(-1, self.latent_size, self.num_mix)
-        if self.num_mix == 1:
-            return log_probs_dists.reshape(-1, self.latent_size)
-
-        log_mix_coefs = output[:, self._log_mix_coef_perm_indexes].reshape(-1, self.latent_size, self.num_mix)
-        log_mix_coefs = log_mix_coefs - t.logsumexp(log_mix_coefs, 2, keepdim=True, ).repeat(1, 1, self.num_mix)
-
-        log_probs_dists += log_mix_coefs
-        log_probs = t.logsumexp(log_probs_dists, 2)
-
-        return log_probs
-
-    def log_prob(self, *args, **kwargs):
-        return t.sum(self.log_prob_hitmap(*args, **kwargs))
-
-    def latent_cor_regularization(self, features):
-        norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
-        correlations = norm_features @ norm_features.reshape(self.latent_size, -1)
-        if config.latent_cor_regularization_abs:
-            return (t.abs(correlations)).sum()
-        return correlations.sum()
-
-    def latent_distance_regularization(
-            self, features, use_norm=config.latent_distance_normalize_features, norm=config.latent_distance_norm
-    ):
-        batch_size = features.shape[0]
-        vec = features
-        if use_norm:
-            vec = features / ((features ** norm).sum(1, keepdim=True) ** (1 / norm)).repeat(1, self.latent_size)
-        a = vec.repeat(1, batch_size).reshape(-1, batch_size, self.latent_size)
-        b = vec.repeat(batch_size, 1).reshape(-1, batch_size, self.latent_size)
-        return (1 / ((t.abs(a - b) ** norm + 1).sum(2) ** (1 / norm))).sum()
-
-    def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
-        return t.sum(1.0 / (eps + t.abs(features)))
-
-    def latent_var_regularization(self, features):
-        return t.sum(((features - features.sum(1, keepdim=True) / self.latent_size) ** 2).sum(1) / self.latent_size)
 
     def save(self, path):
         t.save(self.state_dict(), path)

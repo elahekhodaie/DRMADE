@@ -32,6 +32,7 @@ latent_cor_regularization_factor = config.latent_cor_regularization_factor
 latent_zero_regularization_factor = config.latent_zero_regularization_factor
 latent_variance_regularization_factor = config.latent_variance_regularization_factor
 latent_distance_regularization_factor = config.latent_distance_regularization_factor
+distance_factor = config.distance_factor
 
 noise_factor = config.noising_factor
 
@@ -66,30 +67,33 @@ validation_loader = validation_data.get_dataloader(shuffle=False, batch_size=val
 test_loader = test_data.get_dataloader(shuffle=False, batch_size=test_batch_size)
 
 print('initializing model')
-model = DRMADE(input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix).to(device)
+model = DRMADE(input_shape[1], input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix).to(
+    device)
 model.encoder = model.encoder.to(device)
 model.made = model.made.to(device)
+model.decoder = model.decoder.to(device)
 
 # setting up tensorboard data summerizer
-model_name = '{}{}{}{}{}{}-Adam,lr={},dc={},s={}'.format(
+model_name = '{}{}{}{}{}{}|distance{}|Adam,lr{},dc{},s{}'.format(
     model.name,
-    '-rl_correlation={}{}'.format(
+    '|rl_correlation{}{}'.format(
         "abs" if config.latent_cor_regularization_abs else "noabs",
         latent_cor_regularization_factor,
     ) if latent_cor_regularization_factor else '',
-    '-rl_variance={}'.format(
+    '|rl_variance{}'.format(
         latent_variance_regularization_factor,
     ) if latent_variance_regularization_factor else '',
-    '-rl_zero={}eps{}'.format(
+    '|rl_zero{}eps{}'.format(
         latent_zero_regularization_factor,
         config.latent_zero_regularization_eps,
     ) if latent_zero_regularization_factor else '',
-    '-rl_distance={}{},norm={}'.format(
+    '|rl_distance{}{},norm{}'.format(
         'normalized' if config.latent_distance_normalize_features else '',
         latent_distance_regularization_factor,
         config.latent_distance_norm,
     ) if latent_distance_regularization_factor else '',
-    '-nz={}'.format(noise_factor) if noise_factor else '',
+    '|nz{}'.format(noise_factor) if noise_factor else '',
+    distance_factor,
     base_lr,
     lr_decay,
     lr_half_schedule
@@ -110,6 +114,7 @@ def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed
     data = {
         'loss': 0.0,
         'log_prob': 0.0,
+        'decoder_distance': 0.0,
         'latent_regularization/correlation': 0.0,
         'latent_regularization/zero': 0.0,
         'latent_regularization/variance': 0.0,
@@ -133,12 +138,12 @@ def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed
                 model.made.update_masks()
                 if noise_factor:
                     noised_output = model.made(noised_features)
-                    parameters = model.get_dist_parameters(noised_output)
-                    log_prob += model.log_prob(features, noised_output, parameters=parameters)
+                    parameters = model.made.get_dist_parameters(noised_output)
+                    log_prob += model.made.log_prob(features, noised_output, parameters=parameters)
                 else:
                     output = model.made(features)
-                    parameters = model.get_dist_parameters(output)
-                    log_prob += model.log_prob(features, output=output, parameters=parameters)
+                    parameters = model.made.get_dist_parameters(output)
+                    log_prob += model.made.log_prob(features, output=output, parameters=parameters)
                 for j, regularization in enumerate(config.parameters_regularization):
                     parameters_regularization[j] += regularization(parameters[j])
 
@@ -147,16 +152,19 @@ def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed
             for i in range(config.num_dist_parameters):
                 parameters_regularization[i] /= num_masks
 
-            latent_cor_regularization = model.latent_cor_regularization(
-                noised_features) if noise_factor else model.latent_cor_regularization(features)
-            latent_var_regularization = model.latent_var_regularization(
-                noised_features) if noise_factor else model.latent_var_regularization(features)
-            latent_zero_regularization = model.latent_zero_regularization(
-                noised_features) if noise_factor else model.latent_zero_regularization(features)
-            latent_distance_regularization = model.latent_distance_regularization(
-                noised_features) if noise_factor else model.latent_distance_regularization(features)
+            latent_cor_regularization = model.encoder.latent_cor_regularization(
+                noised_features) if noise_factor else model.encoder.latent_cor_regularization(features)
+            latent_var_regularization = model.encoder.latent_var_regularization(
+                noised_features) if noise_factor else model.encoder.latent_var_regularization(features)
+            latent_zero_regularization = model.encoder.latent_zero_regularization(
+                noised_features) if noise_factor else model.encoder.latent_zero_regularization(features)
+            latent_distance_regularization = model.encoder.latent_distance_regularization(
+                noised_features) if noise_factor else model.encoder.latent_distance_regularization(features)
 
-            loss = -log_prob
+            reconstructed_image = model.decoder(noised_features) if noise_factor else model.decoder(features)
+            decoder_distance = model.decoder.distance(images, reconstructed_image).sum()
+
+            loss = -log_prob + distance_factor * decoder_distance
             if latent_cor_regularization_factor:
                 loss += latent_cor_regularization_factor * latent_cor_regularization
             if latent_zero_regularization_factor:
@@ -172,6 +180,7 @@ def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed
 
             data['loss'] += loss / images.shape[0]
             data['log_prob'] += log_prob / images.shape[0]
+            data['decoder_distance'] += decoder_distance / images.shape[0]
             data['latent_regularization/correlation'] += latent_cor_regularization / images.shape[0]
             data['latent_regularization/zero'] += latent_zero_regularization / images.shape[0]
             data['latent_regularization/variance'] += latent_var_regularization / images.shape[0]
@@ -199,9 +208,10 @@ def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed
     return data
 
 
-def evaluate_loop(data_loader, record_input_images=False, loop_name='evaluation'):
+def evaluate_loop(data_loader, record_input_images=False, record_reconstructions=False, loop_name='evaluation'):
     with t.no_grad():
         scores = t.Tensor().to(device)
+        reconstructed_images = t.Tensor().to(device)
         features = t.Tensor().to(device)
         labels = np.empty(0, dtype=np.int8)
         input_images = t.Tensor().to(device)
@@ -211,9 +221,11 @@ def evaluate_loop(data_loader, record_input_images=False, loop_name='evaluation'
             if record_input_images:
                 input_images = t.cat((input_images, images), dim=0)
 
-            output, latent = model(images)
-            scores = t.cat((scores, model.log_prob_hitmap(latent, output).sum(1)), dim=0)
+            output, latent, reconstruction = model(images)
+            scores = t.cat((scores, model.made.log_prob_hitmap(latent, output).sum(1)), dim=0)
             features = t.cat((features, latent), dim=0)
+            if record_reconstructions:
+                reconstructed_images = t.cat((reconstructed_images, reconstruction), dim=0)
             labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
             if config.log_evaluation_loop_interval and (batch_idx + 1) % config.log_evaluation_loop_interval == 0:
                 print(
@@ -221,7 +233,20 @@ def evaluate_loop(data_loader, record_input_images=False, loop_name='evaluation'
                         loop_name, batch_idx, len(data_loader), time.time() - time_)
                 )
                 time_ = time.time()
-    return scores, features, labels, input_images
+    return scores, features, labels, input_images, reconstructed_images
+
+
+def submit_extreme_cases(input_images, reconstructed_images, epoch, tag='worst_reconstructions',
+                         num_cases=config.num_extreme_cases):
+    distance_hitmap = model.decoder.distance_hitmap(input_images, reconstructed_images).detach().cpu().numpy()
+    distance = model.decoder.distance(input_images, reconstructed_images).detach().cpu().numpy()
+    sorted_indexes = np.argsort(distance)
+    result_images = np.empty((num_cases * 3, input_images.shape[1], input_images.shape[2], input_images.shape[3]))
+    for i, index in enumerate(sorted_indexes[:num_cases]):
+        result_images[i * 3] = input_images[index]
+        result_images[i * 3 + 1] = reconstructed_images[index]
+        result_images[i * 3 + 2] = distance_hitmap[index]
+    writer.add_images(tag, result_images, epoch)
 
 
 def submit_loop_data(data, title, epoch):
@@ -233,11 +258,11 @@ def submit_loop_data(data, title, epoch):
             writer.add_scalar(f'{key}/{title}', data[key], epoch)
 
 
-def submit_encoder_weights(epoch):
-    writer.add_histogram('encoder/conv1', model.encoder.conv1.weight, epoch)
-    writer.add_histogram('encoder/conv2', model.encoder.conv2.weight, epoch)
-    writer.add_histogram('encoder/conv3', model.encoder.conv3.weight, epoch)
-    writer.add_histogram('encoder/fc1', model.encoder.fc1.weight, epoch)
+def submit_network_weights(epoch):
+    for i, conv in enumerate(model.encoder.conv_layers):
+        writer.add_histogram(f'encoder/conv{i}', conv.weight, epoch)
+    for i, deconv in enumerate(model.decoder.deconv_layers):
+        writer.add_histogram(f'decoder/deconv{i}', deconv.weight, epoch)
 
 
 def submit_features(features, tag, epoch):
@@ -254,28 +279,44 @@ def train():
             submit_loop_data(validation_results, 'validation', epoch)
 
         if config.evaluation_interval and epoch % config.evaluation_interval == 0:
-            scores, features, labels, _ = evaluate_loop(test_loader, loop_name='test evaluation')
-            writer.add_scalar('auc', roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
-                                                   y_score=scores.cpu()), epoch)
+            record_extreme_cases = config.commit_images_interval and (epoch % (
+                    config.evaluation_interval * config.commit_images_interval) == 0)
+            scores, features, labels, images, reconstruction = evaluate_loop(
+                test_loader, record_extreme_cases, record_extreme_cases, loop_name='test evaluation')
+            writer.add_scalar(
+                f'auc{str(config.normal_classes)}',
+                roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                              y_score=scores.cpu()), epoch)
             anomaly_indexes = (np.isin(labels, config.normal_classes) == False)
             writer.add_histogram('log_probs/test/anomaly', scores[anomaly_indexes], epoch)
             writer.add_histogram('log_probs/test/normal', scores[(anomaly_indexes == False)], epoch)
+            if record_extreme_cases:
+                submit_extreme_cases(
+                    images[anomaly_indexes], reconstruction[anomaly_indexes], epoch,
+                    tag='worst_reconstruction/test/anomaly')
+                submit_extreme_cases(
+                    images[(anomaly_indexes == False)], reconstruction[(anomaly_indexes == False)], epoch,
+                    tag='worst_reconstruction/test/normal')
             submit_features(features[anomaly_indexes], 'features/test/anomaly', epoch)
             submit_features(features[(anomaly_indexes == False)], 'features/test/normal', epoch)
-            scores, features, labels, _ = evaluate_loop(train_loader, loop_name='train evaluation')
+
+            scores, features, labels, images, reconstruction = evaluate_loop(
+                train_loader, record_extreme_cases, record_extreme_cases, loop_name='train evaluation')
+            if record_extreme_cases:
+                submit_extreme_cases(images, reconstruction, epoch, tag='worst_reconstruction/train')
             writer.add_histogram('log_probs/train', scores, epoch)
             submit_features(features, 'features/train', epoch)
             writer.flush()
 
         if config.embedding_interval and (epoch + 1) % config.embedding_interval == 0:
-            scores, features, labels, input_images = evaluate_loop(test_loader, record_input_images=True,
-                                                                   loop_name='embedding process')
-            writer.add_embedding(features, metadata=labels, label_img=input_images, global_step=epoch,
+            scores, features, labels, images, reconstruction = evaluate_loop(test_loader, record_input_images=True,
+                                                                             loop_name='embedding process')
+            writer.add_embedding(features, metadata=labels, label_img=images, global_step=epoch,
                                  tag=f'{model_name}/test')
             writer.flush()
 
         if config.track_weights_interval and epoch % config.track_weights_interval == 0:
-            submit_encoder_weights(epoch)
+            submit_network_weights(epoch)
 
         train_results = data_feed_loop(train_loader, True, loop_name='train')
         submit_loop_data(train_results, 'train', epoch)

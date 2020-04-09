@@ -22,8 +22,18 @@ parameters_regularization = [lambda x: 0, lambda x: t.sum(1 / x)]
 encoder_use_bias = False
 encoder_bn_affine = False
 encoder_bn_eps = 1e-4
-encoder_tanh_latent = False
 encoder_bn_latent = False
+encoder_num_layers = 2
+encoder_latent_activation = ''  # '', tanh, leaky_relu
+encoder_layers_activation = 'elu'  # leaky_relu, elu, relu
+
+decoder_use_bias = False
+decoder_bn_affine = False
+decoder_bn_eps = 1e-4
+decoder_num_layers = 2
+decoder_output_activation = 'tanh'  # '', tanh, sigmoid
+decoder_layers_activation = 'elu'  # leaky_relu, elu, relu
+decoder_distance_norm = 2
 
 # training
 train_dataset = datasets.MNIST
@@ -43,6 +53,7 @@ latent_zero_regularization_factor = 0.01
 latent_zero_regularization_eps = 1e-3
 latent_variance_regularization_factor = 0.1
 latent_distance_regularization_factor = 0.1
+distance_factor = 1
 latent_distance_normalize_features = False
 latent_distance_norm = 2
 parameters_regularization_factor = [0, 1]
@@ -57,8 +68,9 @@ seed = 1  # Random seed to use
 
 # data
 # data loader
-batch_size = 512  # Batch size during training per GPU
-test_batch_size = batch_size
+train_batch_size = 512
+validation_batch_size = 128
+test_batch_size = 512
 dataloader_num_workers = 4
 dataloader_pin_memory = True
 dataloader_shuffle = True
@@ -68,10 +80,12 @@ dataloader_drop_last = True
 save_interval = 16
 validation_interval = 16
 evaluation_interval = 16
+commit_images_interval = 4
 embedding_interval = 1024
 track_weights_interval = 64
 log_data_feed_loop_interval = 8
 log_evaluation_loop_interval = 8
+num_extreme_cases = 16
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset

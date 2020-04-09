@@ -7,6 +7,15 @@ import torch.nn.functional as F
 import src.config as config
 
 
+class Interpolate(nn.Module):
+    def __init__(self, scale_factor):
+        super(Interpolate, self).__init__()
+        self.scale_factor = scale_factor
+
+    def forward(self, x):
+        return torch.nn.functional.interpolate(x, scale_factor=self.scale_factor)
+
+
 class MaskedLinear(nn.Linear):
     """ same as Linear except has a configurable mask on the weights """
 
@@ -22,8 +31,21 @@ class MaskedLinear(nn.Linear):
 
 
 class MADE(nn.Module):
-    def __init__(self, nin, hidden_sizes, nout, num_masks=config.made_num_masks, bias=config.made_use_biases,
-                 natural_ordering=config.made_natural_ordering):
+    def __init__(
+            self,
+            nin,
+            hidden_sizes,
+            nout,
+            num_masks=config.made_num_masks,
+            bias=config.made_use_biases,
+            natural_ordering=config.made_natural_ordering,
+            num_dist_parameters=config.num_dist_parameters,
+            distribution=config.distribution,
+            parameters_transform=config.parameters_transform,
+            parameters_min=config.paramteres_min_value,
+            num_mix=config.num_mix,
+            name=None,
+    ):
         """
         nin: integer; number of inputs
         hidden sizes: a list of integers; number of units in hidden layers
@@ -33,14 +55,36 @@ class MADE(nn.Module):
               same input dimensions in "chunks" and should be carefully decoded downstream appropriately.
               the output of running the tests for this file makes this a bit more clear with examples.
         num_masks: can be used to train ensemble over orderings/connections
-        natural_ordering: force natural ordering of dimensions, don't use random permutations
+        natural_ordering: force natural ordering of dimensions, don'torch use random permutations
         """
 
         super().__init__()
+        assert nout % nin == 0, "nout must be integer multiple of nin"
+
         self.nin = nin
         self.nout = nout
         self.hidden_sizes = hidden_sizes
-        assert self.nout % self.nin == 0, "nout must be integer multiple of nin"
+        self.distribution = distribution
+        self.parameters_min = parameters_min
+        self.num_dist_parameters = num_dist_parameters
+        self.parameters_transform = parameters_transform
+        self.num_mix = num_mix
+        self.num_masks = num_masks
+        self._feature_perm_indexes = [j for i in range(self.nin) for j in
+                                      range(i, self.nin * self.num_mix, self.nin)]
+        self._log_mix_coef_perm_indexes = [j for i in range(self.nin) for j in
+                                           range(i + self.nin * self.num_mix * self.num_dist_parameters,
+                                                 self.nin * self.num_mix * (
+                                                         self.num_dist_parameters + 1),
+                                                 self.nin)]
+
+        self.name = 'MADEhl=[{}]-nmasks={}-dist={},nmix={},pmin=[{}]'.format(
+            ','.join(str(i) for i in hidden_sizes),
+            self.num_masks,
+            self.distribution.__name__,
+            self.num_mix,
+            ','.join(str(i) for i in self.parameters_min),
+        ) if not name else name
 
         # define a simple MLP neural net
         self.net = []
@@ -118,52 +162,253 @@ class MADE(nn.Module):
         for nl, k, ix, isok in res:
             print("output %2d depends on inputs: %30s : %s" % (k, ix, "OK" if isok else "NOTOK"))
 
+    def get_dist_parameters(self, output):
+        parameters = []
+        for z, transform in enumerate(self.parameters_transform):
+            parameters.append(
+                self.parameters_min[z] + transform(
+                    output[:, [j for i in range(self.nin) for j in
+                               range(i + self.nin * self.num_mix * z,
+                                     self.nin * self.num_mix * (z + 1),
+                                     self.nin)]]
+                )
+            )
+        return parameters
+
+    def log_prob_hitmap(self, x, output=None, parameters=None):
+        if output is None:
+            output = self(x)
+        features = x
+
+        features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
+        if parameters is None:
+            parameters = self.get_dist_parameters(output)
+
+        dists = self.distribution(*parameters)
+        log_probs_dists = dists.log_prob(features).reshape(-1, self.nin, self.num_mix)
+        if self.num_mix == 1:
+            return log_probs_dists.reshape(-1, self.nin)
+
+        log_mix_coefs = output[:, self._log_mix_coef_perm_indexes].reshape(-1, self.nin, self.num_mix)
+        log_mix_coefs = log_mix_coefs - torch.logsumexp(log_mix_coefs, 2, keepdim=True, ).repeat(1, 1, self.num_mix)
+
+        log_probs_dists += log_mix_coefs
+        log_probs = torch.logsumexp(log_probs_dists, 2)
+
+        return log_probs
+
+    def log_prob(self, *args, **kwargs):
+        return torch.sum(self.log_prob_hitmap(*args, **kwargs))
+
 
 class Encoder(nn.Module):
     def __init__(
             self,
             num_channels,
             latent_size,
+            input_size,
+            num_layers,
             bias=config.encoder_use_bias,
             bn_affine=config.encoder_bn_affine,
             bn_eps=config.encoder_bn_eps,
-            tanh_latent=config.encoder_tanh_latent,
             bn_latent=config.encoder_bn_latent,
+            layers_activation=config.encoder_layers_activation,
+            latent_activation=config.encoder_latent_activation,
+            name=None,
     ):
         super(Encoder, self).__init__()
+        assert num_layers > 0, 'non-positive number of layers'
+        latent_image_size = input_size // (2 ** num_layers)
 
+        assert latent_image_size > 0, 'number of layers is too large'
+        assert latent_activation in ['', 'tanh', 'leaky_relu', 'sigmoid'], 'unknown latent activation'
+        assert layers_activation in ['relu', 'elu', 'leaky_relu'], 'non-positive number of layers'
+
+        self.num_layers = num_layers
         self.num_input_channels = num_channels
         self.latent_size = latent_size
-        self.tanh_latent = tanh_latent
         self.bn_latent = bn_latent
+        self.latent_activation = latent_activation
+        self.layers_activation = layers_activation
 
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv1 = nn.Conv2d(self.num_input_channels, 32, 5, bias=bias, padding=2)
-        nn.init.xavier_uniform_(self.conv1.weight, gain=nn.init.calculate_gain('leaky_relu'))
-        self.bn2d1 = nn.BatchNorm2d(32, eps=bn_eps, affine=bn_affine)
-        self.conv2 = nn.Conv2d(32, 64, 5, bias=bias, padding=2)
-        nn.init.xavier_uniform_(self.conv2.weight, gain=nn.init.calculate_gain('leaky_relu'))
-        self.bn2d2 = nn.BatchNorm2d(64, eps=bn_eps, affine=bn_affine)
-        self.conv3 = nn.Conv2d(64, 128, 5, bias=bias, padding=2)
-        nn.init.xavier_uniform_(self.conv3.weight, gain=nn.init.calculate_gain('leaky_relu'))
-        self.bn2d3 = nn.BatchNorm2d(128, eps=bn_eps, affine=bn_affine)
-        self.fc1 = nn.Linear(128 * 3 * 3, self.latent_size, bias=bias)
-        if tanh_latent:
-            nn.init.xavier_uniform_(self.fc1.weight, gain=nn.init.calculate_gain('tanh'))
-        if bn_latent:
-            self.bn1d = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine)
+        self.name = 'Encoder{}{}{}-{}{}{}'.format(
+            self.num_layers,
+            self.layers_activation,
+            'bn_affine' if bn_affine else '',
+            self.latent_size,
+            self.latent_activation,
+            'bn' if self.bn_latent else '',
+        ) if not name else name
+
+        self.conv_layers = []
+        self.batch_norms = []
+        self.layers = []
+        for i in range(self.num_layers):
+            self.conv_layers.append(
+                nn.Conv2d(32 * (2 ** (i - 1)) if i else self.num_input_channels, 32 * (2 ** i), 5, bias=bias,
+                          padding=2))
+            if self.layers_activation == 'elu':
+                nn.init.xavier_uniform_(self.conv_layers[i].weight)
+            else:
+                nn.init.xavier_uniform_(self.conv_layers[i].weight, nn.init.calculate_gain(self.layers_activation))
+            self.layers.append(self.conv_layers[i])
+
+            self.batch_norms.append(nn.BatchNorm2d(32 * (2 ** i), eps=bn_eps, affine=bn_affine))
+            self.layers.append(self.batch_norms[i])
+            if self.layers_activation == 'leaky_relu':
+                self.layers.append(nn.LeakyReLU())
+            if self.layers_activation == 'elu':
+                self.layers.append(nn.ELU())
+            if self.layers_activation == 'relu':
+                self.layers.append(nn.ReLU())
+            self.layers.append(nn.MaxPool2d(2, 2))
+
+        self.convs = nn.Sequential(*self.layers)
+
+        self.fc1 = nn.Linear(32 * (2 ** (num_layers - 1)) * (latent_image_size ** 2), self.latent_size, bias=bias)
+        if not self.latent_activation and self.latent_activation:
+            nn.init.xavier_uniform_(self.fc1.weight, nn.init.calculate_gain(self.latent_activation))
+
+        self.activate_latent = (lambda x: x)
+        self.activate_latent = (lambda x: torch.tanh(x)) if self.latent_activation == 'tanh' else self.activate_latent
+        self.activate_latent = (lambda x: torch.nn.functional.leaky_relu(
+            x)) if self.latent_activation == 'leaky_relu' else self.activate_latent
+        self.activate_latent = (lambda x: torch.nn.functional.sigmoid(
+            x)) if self.latent_activation == 'sigmoid' else self.activate_latent
+
+        self.latent_bn = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine) if self.bn_latent else lambda \
+                x: x
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.pool(F.leaky_relu(self.bn2d1(x)))
-        x = self.conv2(x)
-        x = self.pool(F.leaky_relu(self.bn2d2(x)))
-        x = self.conv3(x)
-        x = self.pool(F.leaky_relu(self.bn2d3(x)))
+        x = self.convs(x)
         x = x.view(x.size(0), -1)
         x = self.fc1(x)
-        if self.tanh_latent:
-            x = torch.tanh(x)
-        if self.bn_latent:
-            x = self.bn1d(x)
+        x = self.latent_bn(x)
+        x = self.activate_latent(x)
         return x
+
+    def latent_cor_regularization(self, features):
+        norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
+        correlations = norm_features @ norm_features.reshape(self.latent_size, -1)
+        if config.latent_cor_regularization_abs:
+            return (torch.abs(correlations)).sum()
+        return correlations.sum()
+
+    def latent_distance_regularization(
+            self, features, use_norm=config.latent_distance_normalize_features, norm=config.latent_distance_norm
+    ):
+        batch_size = features.shape[0]
+        vec = features
+        if use_norm:
+            vec = features / ((features ** norm).sum(1, keepdim=True) ** (1 / norm)).repeat(1, self.latent_size)
+        a = vec.repeat(1, batch_size).reshape(-1, batch_size, self.latent_size)
+        b = vec.repeat(batch_size, 1).reshape(-1, batch_size, self.latent_size)
+        return (1 / ((torch.abs(a - b) ** norm + 1).sum(2) ** (1 / norm))).sum()
+
+    def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
+        return torch.sum(1.0 / (eps + torch.abs(features)))
+
+    def latent_var_regularization(self, features):
+        return torch.sum(((features - features.sum(1, keepdim=True) / self.latent_size) ** 2).sum(1) / self.latent_size)
+
+
+class Decoder(nn.Module):
+    def __init__(
+            self,
+            num_channels,
+            latent_size,
+            output_size,
+            num_layers,
+            layers_activation=config.decoder_layers_activation,
+            output_activation=config.decoder_output_activation,
+            bias=config.decoder_use_bias,
+            bn_affine=config.decoder_bn_affine,
+            bn_eps=config.decoder_bn_eps,
+            name=None
+    ):
+        super().__init__()
+        # Decoder
+        num_layers = int(num_layers)
+        assert num_layers > 0, 'non-positive number of layers'
+
+        self.latent_image_size = output_size // (2 ** num_layers)
+        assert self.latent_image_size > 0, 'number of layers is too large'
+
+        assert output_activation in ['tanh', 'sigmoid'], 'unknown output activation function'
+        assert layers_activation in ['relu', 'elu', 'leaky_relu'], 'unknown layers activation function'
+
+        self.output_size = output_size
+        self.output_activation = output_activation
+        self.layers_activation = layers_activation
+        self.num_output_channels = num_channels
+        self.latent_size = latent_size
+        self.num_layers = num_layers
+        self.latent_num_channels = (
+                latent_size // (self.latent_image_size * self.latent_image_size) + 1) if latent_size % (
+                self.latent_image_size * self.latent_image_size) != 0 else (
+                latent_size // (self.latent_image_size * self.latent_image_size))
+        self.transform_latent = nn.Linear(latent_size,
+                                          self.latent_num_channels * self.latent_image_size * self.latent_image_size,
+                                          bias=bias) if latent_size % (
+                self.latent_image_size * self.latent_image_size) != 0 else lambda x: x
+        self.name = 'Decoder{}{}{}-{}'.format(
+            self.num_layers,
+            self.layers_activation,
+            'bn_affine' if bn_affine else '',
+            self.output_activation,
+        ) if not name else name
+
+        self.deconv_layers = []
+        self.batch_norms = []
+        self.layers = []
+        last_size = self.latent_image_size
+        for i in range(self.num_layers + 1):
+            n_input_channels = 2 ** (5 + self.num_layers - i) if i else self.latent_num_channels
+            n_output_channels = 2 ** (4 + self.num_layers - i) if i != self.num_layers else self.num_output_channels
+            kernel_size = 6 if (output_size // (2 ** (self.num_layers - i - 1))) == 2 * (last_size + 1) else 5
+            if i == self.num_layers:
+                kernel_size = 5 + self.output_size - last_size
+            last_size = (last_size + 1) * 2 if (output_size // (2 ** (self.num_layers - i - 1))) == 2 * (
+                    last_size + 1) else last_size * 2
+
+            self.deconv_layers.append(
+                nn.ConvTranspose2d(n_input_channels, n_output_channels, kernel_size, bias=bias, padding=2)
+            )
+
+            self.layers.append(self.deconv_layers[i])
+
+            self.batch_norms.append(nn.BatchNorm2d(n_output_channels, eps=bn_eps, affine=bn_affine))
+            self.layers.append(self.batch_norms[i])
+            if i != self.num_layers:
+                if self.output_activation == 'elu':
+                    nn.init.xavier_uniform_(self.deconv_layers[i].weight)
+                else:
+                    nn.init.xavier_uniform_(self.deconv_layers[i].weight,
+                                            nn.init.calculate_gain(self.output_activation))
+                if self.layers_activation == 'leaky_relu':
+                    self.layers.append(nn.LeakyReLU())
+                if self.layers_activation == 'elu':
+                    nn.init.xavier_uniform_(self.deconv_layers[i].weight)
+                    self.layers.append(nn.ELU())
+                if self.layers_activation == 'relu':
+                    self.layers.append(nn.ReLU())
+                self.layers.append(Interpolate(2))
+            else:
+                nn.init.xavier_uniform_(self.deconv_layers[i].weight, nn.init.calculate_gain(self.output_activation))
+                if self.output_activation == 'tanh':
+                    self.layers.append(nn.Tanh())
+                if self.layers_activation == 'sigmoid':
+                    self.layers.append(nn.Sigmoid())
+        self.deconv = nn.Sequential(*self.layers)
+
+    def forward(self, x):
+        x = self.transform_latent(x)
+        x = x.view(x.size(0), self.latent_num_channels, self.latent_image_size, self.latent_image_size)
+        x = self.deconv(x)
+        return x
+
+    def distance_hitmap(self, input_image, output_image):
+        return torch.abs(input_image - output_image)
+
+    def distance(self, input_image, output_image, norm=2):
+        return (self.distance_hitmap(input_image, output_image) ** norm).sum(1).sum(1).sum(1) ** (1 / norm)
