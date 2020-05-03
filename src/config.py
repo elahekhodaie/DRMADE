@@ -69,6 +69,11 @@ pretrain_ae_latent_pgd_iterations = 20
 pretrain_ae_latent_pgd_alpha = 0.05
 pretrain_ae_latent_pgd_randomize = False
 
+pretrain_emade_pgd_eps = 0.2
+pretrain_emade_pgd_iterations = 20
+pretrain_emade_pgd_alpha = 0.05
+pretrain_emade_pgd_randomize = False
+
 max_epoch = 2050
 
 checkpoint_drmade = None
