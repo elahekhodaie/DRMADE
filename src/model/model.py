@@ -93,3 +93,13 @@ class DRMADE(nn.Module):
                     print(e)
                     pass
         print('loaded {:.2f}% of params'.format(100 * added / float(len(self.state_dict().keys()))))
+
+    def forward_ae(self, x, features=None):
+        if not features:
+            features = self.encoder(x)
+        return self.decoder(features)
+
+    def forward_drmade(self, x, features=None):
+        if not features:
+            features = self.encoder(x)
+        return self.made(features)

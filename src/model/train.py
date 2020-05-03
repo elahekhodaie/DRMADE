@@ -1,328 +1,461 @@
-import time
-import torch as t
+import torch as torch
 from torch.optim import lr_scheduler, Adam
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import datasets
 from pathlib import Path
 import numpy as np
+
+import tensorflow as tf
+import tensorboard as tb
+tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 from sklearn.metrics import roc_auc_score
 from src.utils.data import DatasetSelection
 from src.model.model import DRMADE
 import src.config as config
 
-np.seterr(divide='ignore', invalid='ignore')
-
-config.set_output_dirs('./output')
-
-# variables
-train_batch_size = 512
-validation_batch_size = 128
-test_batch_size = 512
-
-device = t.device("cuda" if t.cuda.is_available() else "cpu")
-print("device:", device)
-
-hidden_layers = config.made_hidden_layers
-num_masks = config.made_num_masks
-num_mix = config.num_mix
-latent_size = config.latent_size
-
-latent_cor_regularization_factor = config.latent_cor_regularization_factor
-latent_zero_regularization_factor = config.latent_zero_regularization_factor
-latent_variance_regularization_factor = config.latent_variance_regularization_factor
-latent_distance_regularization_factor = config.latent_distance_regularization_factor
-distance_factor = config.distance_factor
-
-noise_factor = config.noising_factor
-
-base_lr = config.base_lr
-lr_decay = config.lr_decay
-lr_half_schedule = config.lr_half_schedule
-
-# accessory functions
-noise_function = lambda x: noise_factor * (
-        2 * t.DoubleTensor(*x).to(device).uniform_() - 1)  # (x will be the input shape tuple)
-lr_multiplicative_factor_lambda = lambda epoch: 0.5 if (epoch + 1) % lr_half_schedule == 0 else lr_decay
-
-# reproducibility
-t.manual_seed(config.seed)
-np.random.seed(config.seed)
-
-# type initialization
-t.set_default_tensor_type('torch.FloatTensor')
-
-print('loading training data')
-train_data = DatasetSelection(datasets.MNIST, classes=config.normal_classes, train=True)
-print('loading validation data')
-validation_data = DatasetSelection(datasets.MNIST, classes=config.normal_classes, train=False)
-print('loading test data')
-test_data = DatasetSelection(datasets.MNIST, train=False)
-
-input_shape = train_data.input_shape()
-
-print('initializing data loaders')
-train_loader = train_data.get_dataloader(shuffle=True, batch_size=train_batch_size)
-validation_loader = validation_data.get_dataloader(shuffle=False, batch_size=validation_batch_size)
-test_loader = test_data.get_dataloader(shuffle=False, batch_size=test_batch_size)
-
-print('initializing model')
-model = DRMADE(input_shape[1], input_shape[0], latent_size, hidden_layers, num_masks=num_masks, num_mix=num_mix).to(
-    device)
-model.encoder = model.encoder.to(device)
-model.made = model.made.to(device)
-model.decoder = model.decoder.to(device)
-
-# setting up tensorboard data summerizer
-model_name = '{}{}{}{}{}{}|distance{}|Adam,lr{},dc{},s{}'.format(
-    model.name,
-    '|rl_correlation{}{}'.format(
-        "abs" if config.latent_cor_regularization_abs else "noabs",
-        latent_cor_regularization_factor,
-    ) if latent_cor_regularization_factor else '',
-    '|rl_variance{}'.format(
-        latent_variance_regularization_factor,
-    ) if latent_variance_regularization_factor else '',
-    '|rl_zero{}eps{}'.format(
-        latent_zero_regularization_factor,
-        config.latent_zero_regularization_eps,
-    ) if latent_zero_regularization_factor else '',
-    '|rl_distance{}{},norm{}'.format(
-        'normalized' if config.latent_distance_normalize_features else '',
-        latent_distance_regularization_factor,
-        config.latent_distance_norm,
-    ) if latent_distance_regularization_factor else '',
-    '|nz{}'.format(noise_factor) if noise_factor else '',
-    distance_factor,
-    base_lr,
-    lr_decay,
-    lr_half_schedule
-)
-print(model_name)
-Path(config.models_dir + f'/{model_name}').mkdir(parents=True, exist_ok=True)
-writer = SummaryWriter(
-    log_dir=config.runs_dir + f'/{model_name}')
-
-print('initializing optimizer')
-optimizer = Adam(model.parameters(), lr=base_lr)
-print('initializing learning rate scheduler')
-scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lr_multiplicative_factor_lambda,
-                                          last_epoch=-1)
+from src.utils.train import Trainer, Action, InputTransform, Loop, DEVICE, LOOP_PREFIX
 
 
-def data_feed_loop(data_loader, optimize=True, log_interval=config.log_data_feed_loop_interval, loop_name=''):
-    data = {
-        'loss': 0.0,
-        'log_prob': 0.0,
-        'decoder_distance': 0.0,
-        'latent_regularization/correlation': 0.0,
-        'latent_regularization/zero': 0.0,
-        'latent_regularization/variance': 0.0,
-        'latent_regularization/distance': 0.0,
-        'parameters_regularization': [0.0 for i in range(config.num_dist_parameters)]
-    }
+class LatentRegularization(Action):
+    def __init__(self, name, function):
+        super(LatentRegularization, self).__init__(f'latent_regularization/{name}')
+        self.function = function
 
-    time_ = time.time()
-    with t.set_grad_enabled(optimize):
-        for batch_idx, (images, _) in enumerate(data_loader):
-            images = images.to(device)
-            if noise_factor:
-                noisy_images = images + noise_function(images.shape)
-                noisy_images.clamp_(min=-1, max=1)
-                noised_features = model.encoder(noisy_images)
-            features = model.encoder(images)
+    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return context['hparams'].get(f'{self.name}/factor', 0.)
 
-            log_prob = 0.0
-            parameters_regularization = [0.0 for i in range(config.num_dist_parameters)]
-            for i in range(num_masks):
-                model.made.update_masks()
-                if noise_factor:
-                    noised_output = model.made(noised_features)
-                    parameters = model.made.get_dist_parameters(noised_output)
-                    log_prob += model.made.log_prob(features, noised_output, parameters=parameters)
-                else:
-                    output = model.made(features)
-                    parameters = model.made.get_dist_parameters(output)
-                    log_prob += model.made.log_prob(features, output=output, parameters=parameters)
-                for j, regularization in enumerate(config.parameters_regularization):
-                    parameters_regularization[j] += regularization(parameters[j])
+    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return context['hparams'].get(f'{self.name}/factor', 0.)
 
-            log_prob /= num_masks
+    def __call__(self, inputs, outputs=None, context=None, loop_data: dict = None, **kwargs):
+        return self.function(context)(loop_data.get('false_features', loop_data.features))
 
-            for i in range(config.num_dist_parameters):
-                parameters_regularization[i] /= num_masks
 
-            latent_cor_regularization = model.encoder.latent_cor_regularization(
-                noised_features) if noise_factor else model.encoder.latent_cor_regularization(features)
-            latent_var_regularization = model.encoder.latent_var_regularization(
-                noised_features) if noise_factor else model.encoder.latent_var_regularization(features)
-            latent_zero_regularization = model.encoder.latent_zero_regularization(
-                noised_features) if noise_factor else model.encoder.latent_zero_regularization(features)
-            latent_distance_regularization = model.encoder.latent_distance_regularization(
-                noised_features) if noise_factor else model.encoder.latent_distance_regularization(features)
+class PGDAttackAction(InputTransform):
+    def __init__(self, action, eps=0.2, alpha=0.05, iterations=40, randomize=True, input_limits=(-1., 1.)):
+        super(PGDAttackAction, self).__init__(f'pgd{action.name}')
+        self.action = action
+        self.eps = eps
+        self.alpha = alpha
+        self.iterations = iterations
+        self.randomize = randomize
+        self.input_limits = input_limits
 
-            reconstructed_image = model.decoder(noised_features) if noise_factor else model.decoder(features)
-            decoder_distance = model.decoder.distance(images, reconstructed_image).sum()
+    def dependency_inputs(self, context=None, loop_data: dict = None, **kwargs):
+        return tuple()
 
-            loss = -log_prob + distance_factor * decoder_distance
-            if latent_cor_regularization_factor:
-                loss += latent_cor_regularization_factor * latent_cor_regularization
-            if latent_zero_regularization_factor:
-                loss += latent_zero_regularization_factor * latent_zero_regularization
-            if latent_variance_regularization_factor:
-                loss += -latent_variance_regularization_factor * latent_var_regularization
-            if latent_distance_regularization_factor:
-                loss += latent_distance_regularization_factor * latent_distance_regularization
+    def is_active(self, context=None, loop_data: dict = None, **kwargs):
+        return self.eps != 0.
 
-            for i, factor in enumerate(config.parameters_regularization_factor):
-                if factor:
-                    loss += factor * parameters_regularization[i]
-
-            data['loss'] += loss / images.shape[0]
-            data['log_prob'] += log_prob / images.shape[0]
-            data['decoder_distance'] += decoder_distance / images.shape[0]
-            data['latent_regularization/correlation'] += latent_cor_regularization / images.shape[0]
-            data['latent_regularization/zero'] += latent_zero_regularization / images.shape[0]
-            data['latent_regularization/variance'] += latent_var_regularization / images.shape[0]
-            data['latent_regularization/distance'] += latent_distance_regularization / images.shape[0]
-            for i, reg in enumerate(parameters_regularization):
-                data['parameters_regularization'][i] += reg / num_masks
-
-            if optimize:
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-            if log_interval and (batch_idx + 1) % log_interval == 0:
-                print(
-                    '\t{}\t{:3d}/{:3d} - loss : {:.4f}, time : {:.3f}s'.format(
-                        loop_name, batch_idx, len(data_loader), data['loss'] / (1 + batch_idx), time.time() - time_)
-                )
-                time_ = time.time()
-    for key in data:
-        if isinstance(data[key], list):
-            for i in range(len(data[key])):
-                data[key][i] /= len(data_loader)
+    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
+        if self.randomize:
+            delta = torch.rand_like(inputs, requires_grad=True)
+            delta.data = delta.data * 2 * self.eps - self.eps
         else:
-            data[key] /= len(data_loader)
-    return data
+            delta = torch.zeros_like(inputs, requires_grad=True)
+
+        for i in range(self.iterations):
+            loss = self.action(inputs + delta, outputs, context=context, loop_data=loop_data)
+            loss.backward()
+            delta.data = (delta + self.alpha * delta.grad.detach().sign()).clamp(-self.eps, self.eps)
+            delta.grad.zero_()
+        if self.input_limits:
+            return (inputs + delta.detach()).clamp(*self.input_limits)
+        return inputs + delta.detach()
 
 
-def evaluate_loop(data_loader, record_input_images=False, record_reconstructions=False, loop_name='evaluation'):
-    with t.no_grad():
-        scores = t.Tensor().to(device)
-        reconstructed_images = t.Tensor().to(device)
-        features = t.Tensor().to(device)
-        labels = np.empty(0, dtype=np.int8)
-        input_images = t.Tensor().to(device)
-        time_ = time.time()
-        for batch_idx, (images, label) in enumerate(data_loader):
-            images = images.to(device)
-            if record_input_images:
-                input_images = t.cat((input_images, images), dim=0)
+class UniformNoiseInput(InputTransform):
+    def __init__(self, factor=0.2, input_limits=(-1., 1.)):
+        super(UniformNoiseInput, self).__init__('uniform_noise_input')
+        self.factor = factor
+        self.input_limits = input_limits
 
-            output, latent, reconstruction = model(images)
-            scores = t.cat((scores, model.made.log_prob_hitmap(latent, output).sum(1)), dim=0)
-            features = t.cat((features, latent), dim=0)
-            if record_reconstructions:
-                reconstructed_images = t.cat((reconstructed_images, reconstruction), dim=0)
-            labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
-            if config.log_evaluation_loop_interval and (batch_idx + 1) % config.log_evaluation_loop_interval == 0:
-                print(
-                    '\t{}\t{:3d}/{:3d} - time : {:.3f}s'.format(
-                        loop_name, batch_idx, len(data_loader), time.time() - time_)
-                )
-                time_ = time.time()
-    return scores, features, labels, input_images, reconstructed_images
+    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None,
+                  dependency_inputs: dict = None, **kwargs):
+        result = inputs + self.factor * (
+                2 * torch.DoubleTensor(*inputs.shape).to(context[DEVICE]).uniform_() - 1)
+        if self.input_limits:
+            return result.clamp(*self.input_limits)
+        return result
 
 
-def submit_extreme_cases(input_images, reconstructed_images, epoch, tag='worst_reconstructions',
-                         num_cases=config.num_extreme_cases):
-    distance_hitmap = model.decoder.distance_hitmap(input_images, reconstructed_images).detach().cpu().numpy()
-    distance = model.decoder.distance(input_images, reconstructed_images).detach().cpu().numpy()
-    sorted_indexes = np.argsort(distance)
-    result_images = np.empty((num_cases * 3, input_images.shape[1], input_images.shape[2], input_images.shape[3]))
-    for i, index in enumerate(sorted_indexes[:num_cases]):
-        result_images[i * 3] = input_images[index]
-        result_images[i * 3 + 1] = reconstructed_images[index]
-        result_images[i * 3 + 2] = distance_hitmap[index]
-    writer.add_images(tag, result_images, epoch)
+latent_cor_action = LatentRegularization('correlation',
+                                         lambda context: context["drmade"].encoder.latent_cor_regularization)
+latent_distance_action = LatentRegularization('distance',
+                                              lambda context: context["drmade"].encoder.latent_distance_regularization)
+latent_zero_action = LatentRegularization('zero',
+                                          lambda context: context["drmade"].encoder.latent_zero_regularization)
+latent_var_action = LatentRegularization('variance',
+                                         lambda context: context["drmade"].encoder.latent_var_regularization)
 
 
-def submit_loop_data(data, title, epoch):
-    for key in data:
-        if isinstance(data[key], list):
-            for i in range(len(data[key])):
-                writer.add_scalar(f'{key}/{title}/{i}', data[key][i], epoch)
-        else:
-            writer.add_scalar(f'{key}/{title}', data[key], epoch)
+class AEForwardPass(Action):
+    def __init__(self, name='', transformed_input=None):
+        super(AEForwardPass, self).__init__(name, transformed_input)
+
+    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return 1.
+
+    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return True
+
+    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
+        features = context["drmade"].encoder(inputs)
+        reconstructions = context["drmade"].decoder(features)
+        return context["drmade"].decoder.distance(inputs, reconstructions).sum()
 
 
-def submit_network_weights(epoch):
-    for i, conv in enumerate(model.encoder.conv_layers):
-        writer.add_histogram(f'encoder/conv{i}', conv.weight, epoch)
-    for i, deconv in enumerate(model.decoder.deconv_layers):
-        writer.add_histogram(f'decoder/deconv{i}', deconv.weight, epoch)
+hyper_parameters = {
+    'dataset': config.dataset,
+    'normal_classes': config.normal_classes,
+    'train_batch_size': config.train_batch_size,
+    'validation_batch_size': config.validation_batch_size,
+    'test_batch_size': config.test_batch_size,
+
+    'made_hidden_layers': config.made_hidden_layers,
+    'num_masks': config.made_num_masks,
+    'num_mix': config.num_mix,
+
+    'latent_size': config.latent_size,
+
+    'latent_regularization/correlation/factor': 0.,
+    'latent_regularization/zero/factor': 0.,
+    'latent_regularization/distance/factor': 0.,
+    'latent_regularization/variance/factor': 0.,
+
+    'ae_input_pgd/eps': 0.2,
+    'ae_input_pgd/iterations': 40,
+    'ae_input_pgd/randomize': True,
+
+    'base_lr': config.base_lr,
+    'lr_decay': config.lr_decay,
+    'lr_half_schedule': config.lr_half_schedule,
+}
 
 
-def submit_features(features, tag, epoch):
-    vector_size = features.shape[1]
-    for i in range(vector_size):
-        writer.add_histogram(f'{tag}/{i}', features[:, i], epoch)
+class DRMADETrainer(Trainer):
+    def __init__(
+            self,
+            drmade=None,
+            device=None,
+            hparams=dict(),
+            name='',
+    ):
+        # reproducibility
+        torch.manual_seed(config.seed)
+        np.random.seed(config.seed)
+        torch.set_default_tensor_type('torch.FloatTensor')
+
+        context = dict()
+        context['hparams'] = hparams
+        context['max_epoch'] = hparams.get('max_epoch', config.max_epoch)
+        # aquiring device cuda if available
+        context['device'] = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("device:", context[DEVICE])
+
+        print('loading training data')
+        context['train_data'] = DatasetSelection(
+            hparams.get('dataset', config.dataset),
+            classes=hparams.get('normal_classes', config.normal_classes), train=True)
+        print('loading validation data')
+        context['validation_data'] = DatasetSelection(
+            hparams.get('dataset', config.dataset),
+            classes=hparams.get('normal_classes', config.normal_classes), train=False)
+        print('loading test data')
+        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False)
+
+        context['input_shape'] = context['train_data'].input_shape()
+
+        print('initializing data loaders')
+        context['train_loader'] = context['train_data'].get_dataloader(
+            shuffle=True, batch_size=hparams.get('train_batch_size', config.train_batch_size))
+        context['validation_loader'] = context['validation_data'].get_dataloader(
+            shuffle=False, batch_size=hparams.get('validation_batch_size', config.validation_batch_size))
+        context['test_loader'] = context['test_data'].get_dataloader(
+            shuffle=False, batch_size=hparams.get('test_batch_size', config.test_batch_size))
+
+        print('initializing model')
+        context['drmade'] = drmade or DRMADE(
+            input_size=context["input_shape"][1],
+            num_channels=context["input_shape"][0],
+            latent_size=hparams.get('latent_size', config.latent_size),
+            made_hidden_layers=hparams.get('made_hidden_layers', config.made_hidden_layers),
+            made_natural_ordering=hparams.get('made_natural_ordering', config.made_natural_ordering),
+            num_masks=hparams.get('made_num_masks', config.made_num_masks),
+            num_mix=hparams.get('num_mix', config.num_mix),
+            num_dist_parameters=hparams.get('num_dist_parameters', config.num_dist_parameters),
+            distribution=hparams.get('distribution', config.distribution),
+            parameters_transform=hparams.get('parameters_transform', config.parameters_transform),
+            parameters_min=hparams.get('paramteres_min_value', config.paramteres_min_value),
+            encoder_num_layers=hparams.get('encoder_num_layers', config.encoder_num_layers),
+            encoder_layers_activation=hparams.get('encoder_layers_activation', config.encoder_layers_activation),
+            encoder_latent_activation=hparams.get('encoder_latent_activation', config.encoder_latent_activation),
+            encoder_latent_bn=hparams.get('encoder_bn_latent', config.encoder_bn_latent),
+            decoder_num_layers=hparams.get('decoder_num_layers', config.decoder_num_layers),
+            decoder_layers_activation=hparams.get('decoder_layers_activation', config.decoder_layers_activation),
+            decoder_output_activation=hparams.get('decoder_output_activation', config.decoder_output_activation),
+        ).to(context[DEVICE])
+        context["drmade"].encoder = context["drmade"].encoder.to(context[DEVICE])
+        context["drmade"].made = context["drmade"].made.to(context[DEVICE])
+        context["drmade"].decoder = context["drmade"].decoder.to(context[DEVICE])
+
+        checkpoint = hparams.get('checkpoint_path', None)
+        if checkpoint:
+            context["drmade"].load(checkpoint, context[DEVICE])
+
+        print(f'model: {context["drmade"].name} was initialized')
+        # setting up tensorboard data summerizer
+        context['name'] = name or '{}[{}]-{}'.format(
+            hparams.get('dataset', config.dataset).__name__,
+            ','.join(str(i) for i in hparams.get('normal_classes', config.normal_classes)),
+            context["drmade"].name
+        )
+        super(DRMADETrainer, self).__init__(context['name'], context, )
+
+    def setup_writer(self, output_root=None):
+        self.context['output_root'] = output_root if output_root else self.context['hparams'].get('output_root',
+                                                                                                  config.output_root)
+        self.context['models_dir'] = f'{self.context["output_root"]}/models'
+        self.context['check_point_saving_dir'] = f'{self.context["models_dir"]}/{self.context["name"]}'
+
+        self.context['runs_dir'] = f'{self.context["output_root"]}/runs'
+
+        # ensuring the existance of output directories
+        Path(self.context['output_root']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['models_dir']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['check_point_saving_dir']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['runs_dir']).mkdir(parents=True, exist_ok=True)
+
+        self.context['writer'] = SummaryWriter(
+            log_dir=f'{self.context["runs_dir"]}/{self.context["name"]}')
+
+    def save_model(self, output_path=None):
+        output_path = output_path or self.context['check_point_saving_dir']
+        self.context['drmade'].save(output_path + f'/{self.context["name"]}-E{self.context["epoch"]}.pth')
+
+    def _evaluate_loop(self, data_loader, record_input_images=False, record_reconstructions=False):
+        with torch.no_grad():
+            log_prob = torch.Tensor().to(self.context[DEVICE])
+            decoder_loss = torch.Tensor().to(self.context[DEVICE])
+            reconstructed_images = torch.Tensor().to(self.context[DEVICE])
+            features = torch.Tensor().to(self.context[DEVICE])
+            labels = np.empty(0, dtype=np.int8)
+            input_images = torch.Tensor().to(self.context[DEVICE])
+            for batch_idx, (images, label) in enumerate(data_loader):
+                images = images.to(self.context[DEVICE])
+                if record_input_images:
+                    input_images = torch.cat((input_images, images), dim=0)
+
+                output, latent, reconstruction = self.context["drmade"](images)
+                decoder_loss = torch.cat(
+                    (decoder_loss, self.context["drmade"].decoder.distance(images, reconstruction)), dim=0)
+                log_prob = torch.cat((log_prob, self.context["drmade"].made.log_prob_hitmap(latent).sum(1)), dim=0)
+                features = torch.cat((features, latent), dim=0)
+
+                if record_reconstructions:
+                    reconstructed_images = torch.cat((reconstructed_images, reconstruction), dim=0)
+                labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
+        return log_prob, decoder_loss, features, labels, input_images, reconstructed_images
+
+    def _submit_latent(self, features, title=''):
+        for i in range(features.shape[1]):
+            self.context['writer'].add_histogram(f'latent/{title}/{i}', features[:, i], self.context["epoch"])
+
+    def _submit_extreme_reconstructions(self, input_images, reconstructed_images, decoder_loss, title=''):
+        num_cases = self.context['hparams'].get('num_extreme_cases', config.num_extreme_cases)
+        distance_hitmap = self.context['drmade'].decoder.distance_hitmap(input_images,
+                                                                         reconstructed_images).detach().cpu().numpy()
+
+        distance = decoder_loss.detach().cpu().numpy()
+        sorted_indexes = np.argsort(distance)
+        result_images = np.empty((num_cases * 3, input_images.shape[1], input_images.shape[2], input_images.shape[3]))
+        input_images = input_images.cpu()
+        reconstructed_images = reconstructed_images.cpu()
+        for i, index in enumerate(sorted_indexes[:num_cases]):
+            result_images[i * 3] = input_images[index]
+            result_images[i * 3 + 1] = reconstructed_images[index]
+            result_images[i * 3 + 2] = distance_hitmap[index]
+        self.context['writer'].add_images(f'worst_reconstruction/{title}', result_images, self.context['epoch'])
+
+        result_images = np.empty((num_cases * 3, input_images.shape[1], input_images.shape[2], input_images.shape[3]))
+        for i, index in enumerate(sorted_indexes[-1:-num_cases:-1]):
+            result_images[i * 3] = input_images[index]
+            result_images[i * 3 + 1] = reconstructed_images[index]
+            result_images[i * 3 + 2] = distance_hitmap[index]
+        self.context['writer'].add_images(f'best_reconstruction/{title}', result_images, self.context['epoch'])
+
+    def _evaluate(self, ):
+        record_extreme_cases = self.context['hparams'].get('num_extreme_cases', config.num_extreme_cases)
+        log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
+            self.context['test_loader'], record_extreme_cases, record_extreme_cases)
+
+        self.context['writer'].add_scalar(
+            f'auc/decoder',
+            roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                          y_score=(-decoder_loss).cpu()), self.context["epoch"])
+        self.context['writer'].add_scalar(
+            f'auc/made',
+            roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                          y_score=log_prob.cpu()), self.context["epoch"])
+        anomaly_indexes = (
+                np.isin(labels, self.context['hparams'].get('normal_classes', config.normal_classes)) == False)
+        self.context['writer'].add_histogram(f'loss/decoder/test/anomaly',
+                                             decoder_loss[anomaly_indexes], self.context["epoch"])
+        self.context['writer'].add_histogram(f'loss/decoder/test/normal',
+                                             decoder_loss[(anomaly_indexes == False)],
+                                             self.context["epoch"])
+
+        self.context['writer'].add_histogram(f'loss/made/anomaly',
+                                             log_prob[anomaly_indexes], self.context["epoch"])
+        self.context['writer'].add_histogram(f'loss/made/normal',
+                                             log_prob[(anomaly_indexes == False)],
+                                             self.context["epoch"])
+
+        if record_extreme_cases:
+            self._submit_extreme_reconstructions(
+                images[anomaly_indexes], reconstruction[anomaly_indexes], decoder_loss[anomaly_indexes],
+                'test/anomaly')
+            self._submit_extreme_reconstructions(
+                images[(anomaly_indexes == False)], reconstruction[(anomaly_indexes == False)],
+                decoder_loss[(anomaly_indexes == False)], 'test/normal')
+        self._submit_latent(features[anomaly_indexes], 'test/anomaly')
+        self._submit_latent(features[(anomaly_indexes == False)], 'test/normal')
+
+        log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
+            self.context['train_loader'], record_extreme_cases, record_extreme_cases)
+
+        self.context['writer'].add_histogram(f'loss/decoder/train',
+                                             decoder_loss, self.context["epoch"])
+        self.context['writer'].add_histogram(f'loss/decoder/train',
+                                             log_prob, self.context["epoch"])
+
+        self._submit_latent(features, 'train')
+
+        if record_extreme_cases:
+            self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'train')
+        self.context['writer'].flush()
+
+    def _submit_embedding(self):
+        log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
+            self.context['test_loader'],
+            record_input_images=True,
+        )
+        self.context['writer'].add_embedding(features, metadata=labels, label_img=images,
+                                             global_step=self.context['epoch'],
+                                             tag=self.context['name'])
+        self.context['writer'].flush()
+
+    def train(self):
+        evaluation_interval = self.context['hparams'].get('evaluation_interval', config.evaluation_interval)
+        embedding_interval = self.context['hparams'].get('embedding_interval', config.embedding_interval)
+        save_interval = self.context['hparams'].get('save_interval', config.save_interval)
+        for epoch in range(self.context['hparams'].get('start_epoch', 0), self.context['max_epoch']):
+            self.context['epoch'] = epoch
+            print(f'epoch {self.context["epoch"]:5d}')
+            if evaluation_interval and epoch % evaluation_interval == 0:
+                self._evaluate()
+
+            if embedding_interval and (epoch + 1) % embedding_interval == 0:
+                self._submit_embedding()
+
+            if save_interval and (epoch + 1) % save_interval == 0:
+                self._submit_embedding()
+
+            for loop in self.context['loops']:
+                if loop.is_active(self.context):
+                    self.context[f'{LOOP_PREFIX}{loop.name}/data'] = loop(self.context)
+                    loop.submit_loop_data(self.context)
+
+            for scheduler in self.context['schedulers']:
+                scheduler.step()
+
+            self.submit_progress()
 
 
-def train():
-    for epoch in range(config.max_epoch):
-        print('epoch {:4} - lr: {}'.format(epoch, optimizer.param_groups[0]["lr"]))
-        if config.validation_interval and epoch % config.validation_interval == 0:
-            validation_results = data_feed_loop(validation_loader, False, loop_name='validation')
-            submit_loop_data(validation_results, 'validation', epoch)
+class RobustAEFeedLoop(Loop):
+    def __init__(self, name, data_loader, device, optimizers=None, attacker=None, interval=1, log_interval=0):
+        attacker = attacker or PGDAttackAction(
+            AEForwardPass('ae'), eps=config.pretrain_ae_pgd_eps, iterations=config.pretrain_ae_pgd_iterations,
+            randomize=config.pretrain_ae_pgd_randomize)
+        super(RobustAEFeedLoop, self).__init__(
+            name,
+            data_loader,
+            device,
+            input_transforms=(attacker,),
+            loss_actions=(AEForwardPass('ae', 'pgdae'),),
+            optimizers=optimizers,
+            log_interval=log_interval
+        )
+        self.interval = interval
 
-        if config.evaluation_interval and epoch % config.evaluation_interval == 0:
-            record_extreme_cases = config.commit_images_interval and (epoch % (
-                    config.evaluation_interval * config.commit_images_interval) == 0)
-            scores, features, labels, images, reconstruction = evaluate_loop(
-                test_loader, record_extreme_cases, record_extreme_cases, loop_name='test evaluation')
-            writer.add_scalar(
-                f'auc{str(config.normal_classes)}',
-                roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
-                              y_score=scores.cpu()), epoch)
-            anomaly_indexes = (np.isin(labels, config.normal_classes) == False)
-            writer.add_histogram('log_probs/test/anomaly', scores[anomaly_indexes], epoch)
-            writer.add_histogram('log_probs/test/normal', scores[(anomaly_indexes == False)], epoch)
-            if record_extreme_cases:
-                submit_extreme_cases(
-                    images[anomaly_indexes], reconstruction[anomaly_indexes], epoch,
-                    tag='worst_reconstruction/test/anomaly')
-                submit_extreme_cases(
-                    images[(anomaly_indexes == False)], reconstruction[(anomaly_indexes == False)], epoch,
-                    tag='worst_reconstruction/test/normal')
-            submit_features(features[anomaly_indexes], 'features/test/anomaly', epoch)
-            submit_features(features[(anomaly_indexes == False)], 'features/test/normal', epoch)
+    def is_active(self, context: dict = None, **kwargs):
+        return context['epoch'] % self.interval == 0
 
-            scores, features, labels, images, reconstruction = evaluate_loop(
-                train_loader, record_extreme_cases, record_extreme_cases, loop_name='train evaluation')
-            if record_extreme_cases:
-                submit_extreme_cases(images, reconstruction, epoch, tag='worst_reconstruction/train')
-            writer.add_histogram('log_probs/train', scores, epoch)
-            submit_features(features, 'features/train', epoch)
-            writer.flush()
 
-        if config.embedding_interval and (epoch + 1) % config.embedding_interval == 0:
-            scores, features, labels, images, reconstruction = evaluate_loop(test_loader, record_input_images=True,
-                                                                             loop_name='embedding process')
-            writer.add_embedding(features, metadata=labels, label_img=images, global_step=epoch,
-                                 tag=f'{model_name}/test')
-            writer.flush()
+class RobustAutoEncoderPreTrainer(DRMADETrainer):
+    def __init__(self, model=None, device=None, hparams=dict(), name=None):
+        super(RobustAutoEncoderPreTrainer, self).__init__(model, device, hparams, name)
 
-        if config.track_weights_interval and epoch % config.track_weights_interval == 0:
-            submit_network_weights(epoch)
+        pgd_eps = hparams.get('ae_input_pgd/eps', config.pretrain_ae_pgd_eps)
+        pgd_iterations = hparams.get('ae_input_pgd/iterations', config.pretrain_ae_pgd_iterations)
+        pgd_randomize = hparams.get('ae_input_pgd/randomize', config.pretrain_ae_pgd_randomize)
 
-        train_results = data_feed_loop(train_loader, True, loop_name='train')
-        submit_loop_data(train_results, 'train', epoch)
+        base_lr = hparams.get('base_lr', config.base_lr)
+        lr_decay = hparams.get('lr_decay', config.lr_decay)
+        lr_half_schedule = hparams.get('lr_half_schedule', config.lr_half_schedule)
 
-        writer.add_scalar('learning_rate', optimizer.param_groups[0]["lr"], epoch)
-        scheduler.step()
+        print(f'initializing optimizer Adam - base_lr:{base_lr}')
+        optimizer = Adam(
+            [
+                {'params': self.context['drmade'].encoder.parameters()},
+                {'params': self.context['drmade'].decoder.parameters()}
+            ], lr=base_lr
+        )
+        self.context['optimizers'] = [optimizer]
+        self.context['optimizer/ae'] = optimizer
 
-        if config.save_interval and (epoch + 1) % config.save_interval == 0:
-            model.save(config.models_dir + f'/{model_name}/{model_name}-E{epoch}.pth')
+        print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_half_schedule}')
+        self.context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.5 if (
+                                                                                       epoch + 1) % lr_half_schedule == 0 \
+            else lr_decay
+        scheduler = lr_scheduler.MultiplicativeLR(optimizer,
+                                                  lr_lambda=self.context['lr_multiplicative_factor_lambda'],
+                                                  last_epoch=-1)
+        self.context['schedulers'] = [scheduler]
+        self.context['scheduler/ae'] = scheduler
+
+        self.context['name'] = name or 'PreTrain-{}|pgd-eps{}-iterations{}{}|Adam-lr{}-half{}-decay{}'.format(
+            self.context['name'],
+            pgd_eps,
+            pgd_iterations,
+            'randomized' if pgd_randomize else '',
+            base_lr,
+            lr_half_schedule,
+            lr_decay,
+        )
+        print("Pre Trainer: ", self.context['name'])
+        attacker = PGDAttackAction(
+            AEForwardPass('ae'), eps=pgd_eps, iterations=pgd_iterations,
+            randomize=pgd_randomize)
+
+        train_loop = RobustAEFeedLoop(
+            name='train',
+            data_loader=self.context['train_loader'],
+            device=self.context[DEVICE],
+            optimizers=('ae',),
+            attacker=attacker,
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        validation = RobustAEFeedLoop(
+            name='validation',
+            data_loader=self.context['validation_loader'],
+            device=self.context[DEVICE],
+            optimizers=tuple(),
+            attacker=attacker,
+            interval=hparams.get('validation_interval', config.validation_interval),
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        self.context['loops'] = [validation, train_loop]
+        self.setup_writer()

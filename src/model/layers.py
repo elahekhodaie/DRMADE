@@ -175,7 +175,7 @@ class MADE(nn.Module):
             )
         return parameters
 
-    def log_prob_hitmap(self, x, output=None, parameters=None):
+    def _log_prob_hitmap(self, x, output=None, parameters=None):
         if output is None:
             output = self(x)
         features = x
@@ -197,8 +197,18 @@ class MADE(nn.Module):
 
         return log_probs
 
-    def log_prob(self, *args, **kwargs):
-        return torch.sum(self.log_prob_hitmap(*args, **kwargs))
+    def log_prob_hitmap(self, features, outputs=None, parameters=None):
+        result = self._log_prob_hitmap(features, outputs, parameters)
+        if outputs is not None or parameters is not None:
+            return result
+        self.update_masks()
+        for i in range(self.num_masks - 1):
+            result += self._log_prob_hitmap(features)
+            self.update_masks()
+        return result / self.num_masks
+
+    def log_prob(self, features, output=None, parameters=None):
+        return self.log_prob_hitmap(features, output, parameters).sum()
 
 
 class Encoder(nn.Module):
@@ -411,4 +421,5 @@ class Decoder(nn.Module):
         return torch.abs(input_image - output_image)
 
     def distance(self, input_image, output_image, norm=2):
-        return (self.distance_hitmap(input_image, output_image) ** norm).sum(1).sum(1).sum(1) ** (1 / norm)
+        return ((self.distance_hitmap(input_image, output_image) ** norm).sum(1).sum(1).sum(
+            1) + config.decoder_distance_eps) ** (1 / norm)

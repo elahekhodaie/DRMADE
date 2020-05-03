@@ -7,8 +7,8 @@ import torch as t
 # model architecture
 latent_size = 16
 
-made_hidden_layers = [64, 64, 64]
-made_num_masks = 16
+made_hidden_layers = [132, 132, 132]
+made_num_masks = 5
 made_use_biases = True
 made_natural_ordering = True
 
@@ -34,29 +34,31 @@ decoder_num_layers = 2
 decoder_output_activation = 'tanh'  # '', tanh, sigmoid
 decoder_layers_activation = 'elu'  # leaky_relu, elu, relu
 decoder_distance_norm = 2
+decoder_distance_eps = 1e-5
 
 # training
-train_dataset = datasets.MNIST
-normal_classes = [8]
-
-test_classes = None
-test_dataset = datasets.MNIST
+dataset = datasets.MNIST
+normal_classes = [1]
 
 lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
 lr_half_schedule = 512  # interval of epochs to reduce learning rate 50%
 base_lr = 0.0002
 
 noising_factor = 0  # the noise to add to each input while training the model
-latent_cor_regularization_factor = 0.01
+latent_cor_regularization_factor = 0.
 latent_cor_regularization_abs = False
-latent_zero_regularization_factor = 0.01
+latent_zero_regularization_factor = 0.
 latent_zero_regularization_eps = 1e-3
-latent_variance_regularization_factor = 0.1
-latent_distance_regularization_factor = 0.1
+latent_variance_regularization_factor = 0.
+latent_distance_regularization_factor = 0.
 distance_factor = 1
 latent_distance_normalize_features = False
 latent_distance_norm = 2
 parameters_regularization_factor = [0, 1]
+
+pretrain_ae_pgd_eps = 0.2
+pretrain_ae_pgd_iterations = 20
+pretrain_ae_pgd_randomize = False
 
 max_epoch = 2050
 
@@ -89,27 +91,4 @@ num_extreme_cases = 16
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset
-models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
-runs_dir = output_root + '/runs'
-log_dir = output_root + '/log'
-
-
-def set_output_dirs(root='./output'):
-    global output_root, data_dir, models_dir, runs_dir, log_dir
-    output_root = root
-    data_dir = '.' + '/data'  # Location for the dataset
-    models_dir = output_root + '/models'  # Location for parameter checkpoints and samples
-    runs_dir = output_root + '/runs'
-    log_dir = output_root + '/log'
-    # losses_dir = log_dir + '/losses'
-    # evaluation_dir = log_dir + '/evaluation'
-    # extreme_cases_dir = log_dir + '/extreme_cases'
-
-    # ensuring the existance of output directories
-    Path(output_root).mkdir(parents=True, exist_ok=True)
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    Path(models_dir).mkdir(parents=True, exist_ok=True)
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    # Path(evaluation_dir).mkdir(parents=True, exist_ok=True)
-    # Path(losses_dir).mkdir(parents=True, exist_ok=True)
-    # Path(extreme_cases_dir).mkdir(parents=True, exist_ok=True)
+Path(data_dir).mkdir(parents=True, exist_ok=True)
