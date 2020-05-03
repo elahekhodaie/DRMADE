@@ -454,9 +454,9 @@ class RobustMadeFeedLoop(Loop):
         return context['epoch'] % self.interval == 0
 
 
-class RobustAutoEncoderPreTrainer(DRMADETrainer):
+class RobustMadePreTrainer(DRMADETrainer):
     def __init__(self, model=None, device=None, hparams=dict(), name=None):
-        super(RobustAutoEncoderPreTrainer, self).__init__(model, device, hparams, name)
+        super(RobustMadePreTrainer, self).__init__(model, device, hparams, name)
 
         input_limits = self.context['drmade'].decoder.output_limits
         pgd_eps = hparams.get('emade_input_pgd/eps', config.pretrain_emade_pgd_eps)
@@ -478,9 +478,8 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_half_schedule}')
         self.context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.5 if \
             (epoch + 1) % lr_half_schedule == 0 else lr_decay
-        scheduler = lr_scheduler.MultiplicativeLR(optimizer,
-                                                  lr_lambda=self.context['lr_multiplicative_factor_lambda'],
-                                                  last_epoch=-1)
+        scheduler = lr_scheduler.MultiplicativeLR(
+            optimizer, lr_lambda=self.context['lr_multiplicative_factor_lambda'], last_epoch=-1)
         self.context['schedulers'] = [scheduler]
         self.context['scheduler/made'] = scheduler
 
@@ -506,6 +505,85 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
             data_loader=self.context['train_loader'],
             device=self.context[DEVICE],
             optimizers=('made',),
+            attacker=attacker,
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        validation = RobustAEFeedLoop(
+            name='validation',
+            data_loader=self.context['validation_loader'],
+            device=self.context[DEVICE],
+            optimizers=tuple(),
+            attacker=attacker,
+            interval=hparams.get('validation_interval', config.validation_interval),
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        self.context['loops'] = [validation, train_loop]
+        self.setup_writer()
+
+
+class RobustAutoEncoderPreTrainer(DRMADETrainer):
+    def __init__(self, model=None, device=None, hparams=dict(), name=None):
+        super(RobustAutoEncoderPreTrainer, self).__init__(model, device, hparams, name)
+
+        input_limits = self.context['drmade'].decoder.output_limits
+        pgd_eps = hparams.get('ae_input_pgd/eps', config.pretrain_ae_pgd_eps)
+        pgd_iterations = hparams.get('ae_input_pgd/iterations', config.pretrain_ae_pgd_iterations)
+        pgd_alpha = hparams.get('ae_input_pgd/alpha', config.pretrain_ae_pgd_alpha)
+        pgd_randomize = hparams.get('ae_input_pgd/randomize', config.pretrain_ae_pgd_randomize)
+
+        latent_limits = self.context['drmade'].encoder.output_limits
+        pgd_latent_eps = hparams.get('ae_latent_pgd/eps', config.pretrain_ae_latent_pgd_eps)
+        pgd_latent_eps = hparams.get('ae_latent_pgd/iterations', config.pretrain_ae_latent_pgd_iterations)
+        pgd_latent_eps = hparams.get('ae_latent_pgd/alpha', config.pretrain_ae_latent_pgd_iterations)
+        pgd_latent_randomize = hparams.get('ae_input_pgd/randomize', config.pretrain_ae_latent_pgd_randomize)
+
+        base_lr = hparams.get('base_lr', config.base_lr)
+        lr_decay = hparams.get('lr_decay', config.lr_decay)
+        lr_half_schedule = hparams.get('lr_half_schedule', config.lr_half_schedule)
+
+        print(f'initializing optimizer Adam - base_lr:{base_lr}')
+        optimizer = Adam(
+            [
+                {'params': self.context['drmade'].encoder.parameters()},
+                {'params': self.context['drmade'].decoder.parameters()}
+            ], lr=base_lr
+        )
+        self.context['optimizers'] = [optimizer]
+        self.context['optimizer/ae'] = optimizer
+
+        print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_half_schedule}')
+        self.context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.5 \
+            if (epoch + 1) % lr_half_schedule == 0 else lr_decay
+        scheduler = lr_scheduler.MultiplicativeLR(
+            optimizer, lr_lambda=self.context['lr_multiplicative_factor_lambda'], last_epoch=-1)
+        self.context['schedulers'] = [scheduler]
+        self.context['scheduler/ae'] = scheduler
+
+        self.context[
+            'name'] = name or 'PreTrain-{}-{}:{}|pgd-eps{}-iterations{}alpha{}{}|Adam-lr{}-half{}-decay{}'.format(
+            self.context['name'],
+            self.context['drmade'].encoder.name,
+            self.context['drmade'].decoder.name,
+            pgd_eps,
+            pgd_iterations,
+            pgd_alpha,
+            'randomized' if pgd_randomize else '',
+            base_lr,
+            lr_half_schedule,
+            lr_decay,
+        )
+        print("Pre Trainer: ", self.context['name'])
+        attacker = PGDAttackAction(
+            AEForwardPass('ae'), eps=pgd_eps, iterations=pgd_iterations, alpha=pgd_alpha,
+            randomize=pgd_randomize, input_limits=input_limits)
+
+        train_loop = RobustAEFeedLoop(
+            name='train',
+            data_loader=self.context['train_loader'],
+            device=self.context[DEVICE],
+            optimizers=('ae',),
             attacker=attacker,
             log_interval=config.log_data_feed_loop_interval,
         )
