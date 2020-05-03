@@ -6,6 +6,7 @@ import numpy as np
 
 import tensorflow as tf
 import tensorboard as tb
+
 tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 from sklearn.metrics import roc_auc_score
@@ -32,14 +33,16 @@ class LatentRegularization(Action):
 
 
 class PGDAttackAction(InputTransform):
-    def __init__(self, action, eps=0.2, alpha=0.05, iterations=40, randomize=True, input_limits=(-1., 1.)):
-        super(PGDAttackAction, self).__init__(f'pgd{action.name}')
+    def __init__(self, action, eps=0.2, alpha=0.05, iterations=20, randomize=True,
+                 input_limits=config.input_limits, transformed_input=None, ):
+        super(PGDAttackAction, self).__init__(f'pgd-{action.name}')
         self.action = action
         self.eps = eps
         self.alpha = alpha
         self.iterations = iterations
         self.randomize = randomize
         self.input_limits = input_limits
+        self.transformed_input = transformed_input
 
     def dependency_inputs(self, context=None, loop_data: dict = None, **kwargs):
         return tuple()
@@ -48,6 +51,8 @@ class PGDAttackAction(InputTransform):
         return self.eps != 0.
 
     def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
+        if self.transformed_input:
+            inputs = loop_data.get(self.transformed_input, inputs)
         if self.randomize:
             delta = torch.rand_like(inputs, requires_grad=True)
             delta.data = delta.data * 2 * self.eps - self.eps
@@ -65,7 +70,7 @@ class PGDAttackAction(InputTransform):
 
 
 class UniformNoiseInput(InputTransform):
-    def __init__(self, factor=0.2, input_limits=(-1., 1.)):
+    def __init__(self, factor=0.2, input_limits=config.input_limits):
         super(UniformNoiseInput, self).__init__('uniform_noise_input')
         self.factor = factor
         self.input_limits = input_limits
@@ -99,10 +104,16 @@ class AEForwardPass(Action):
     def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
         return True
 
-    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
-        features = context["drmade"].encoder(inputs)
+    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
+        if dependency_inputs:
+            inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
+        features = None
+        if dependency_inputs:
+            features = dependency_inputs.get(f'pgd-latent', context["drmade"].encoder(inputs))
+        if features is None:
+            features = context["drmade"].encoder(inputs)
         reconstructions = context["drmade"].decoder(features)
-        return context["drmade"].decoder.distance(inputs, reconstructions).sum()
+        return context["drmade"].decoder.distance(loop_data['inputs'], reconstructions).sum()
 
 
 hyper_parameters = {
@@ -199,16 +210,24 @@ class DRMADETrainer(Trainer):
         context["drmade"].made = context["drmade"].made.to(context[DEVICE])
         context["drmade"].decoder = context["drmade"].decoder.to(context[DEVICE])
 
-        checkpoint = hparams.get('checkpoint_path', None)
-        if checkpoint:
-            context["drmade"].load(checkpoint, context[DEVICE])
+        checkpoint_drmade = hparams.get('checkpoint_drmade', config.checkpoint_drmade)
+        if checkpoint_drmade:
+            context["drmade"].load(checkpoint_drmade, context[DEVICE])
+        checkpoint_encoder = hparams.get('checkpoint_encoder', config.checkpoint_encoder)
+        if checkpoint_encoder:
+            context["drmade"].encoder.load(checkpoint_encoder, context[DEVICE])
+        checkpoint_decoder = hparams.get('checkpoint_decoder', config.checkpoint_drmade)
+        if checkpoint_decoder:
+            context["drmade"].decoder.load(checkpoint_decoder, context[DEVICE])
+        checkpoint_made = hparams.get('checkpoint_made', config.checkpoint_drmade)
+        if checkpoint_made:
+            context["drmade"].made.load(checkpoint_made, context[DEVICE])
 
         print(f'model: {context["drmade"].name} was initialized')
         # setting up tensorboard data summerizer
-        context['name'] = name or '{}[{}]-{}'.format(
+        context['name'] = name or '{}[{}]'.format(
             hparams.get('dataset', config.dataset).__name__,
             ','.join(str(i) for i in hparams.get('normal_classes', config.normal_classes)),
-            context["drmade"].name
         )
         super(DRMADETrainer, self).__init__(context['name'], context, )
 
@@ -275,14 +294,14 @@ class DRMADETrainer(Trainer):
             result_images[i * 3] = input_images[index]
             result_images[i * 3 + 1] = reconstructed_images[index]
             result_images[i * 3 + 2] = distance_hitmap[index]
-        self.context['writer'].add_images(f'worst_reconstruction/{title}', result_images, self.context['epoch'])
+        self.context['writer'].add_images(f'best_reconstruction/{title}', result_images, self.context['epoch'])
 
         result_images = np.empty((num_cases * 3, input_images.shape[1], input_images.shape[2], input_images.shape[3]))
-        for i, index in enumerate(sorted_indexes[-1:-num_cases:-1]):
+        for i, index in enumerate(sorted_indexes[-1:-(num_cases + 1):-1]):
             result_images[i * 3] = input_images[index]
             result_images[i * 3 + 1] = reconstructed_images[index]
             result_images[i * 3 + 2] = distance_hitmap[index]
-        self.context['writer'].add_images(f'best_reconstruction/{title}', result_images, self.context['epoch'])
+        self.context['writer'].add_images(f'worst_reconstruction/{title}', result_images, self.context['epoch'])
 
     def _evaluate(self, ):
         record_extreme_cases = self.context['hparams'].get('num_extreme_cases', config.num_extreme_cases)
@@ -326,7 +345,7 @@ class DRMADETrainer(Trainer):
 
         self.context['writer'].add_histogram(f'loss/decoder/train',
                                              decoder_loss, self.context["epoch"])
-        self.context['writer'].add_histogram(f'loss/decoder/train',
+        self.context['writer'].add_histogram(f'loss/made/train',
                                              log_prob, self.context["epoch"])
 
         self._submit_latent(features, 'train')
@@ -349,6 +368,7 @@ class DRMADETrainer(Trainer):
         evaluation_interval = self.context['hparams'].get('evaluation_interval', config.evaluation_interval)
         embedding_interval = self.context['hparams'].get('embedding_interval', config.embedding_interval)
         save_interval = self.context['hparams'].get('save_interval', config.save_interval)
+
         for epoch in range(self.context['hparams'].get('start_epoch', 0), self.context['max_epoch']):
             self.context['epoch'] = epoch
             print(f'epoch {self.context["epoch"]:5d}')
@@ -359,7 +379,7 @@ class DRMADETrainer(Trainer):
                 self._submit_embedding()
 
             if save_interval and (epoch + 1) % save_interval == 0:
-                self._submit_embedding()
+                self.save_model()
 
             for loop in self.context['loops']:
                 if loop.is_active(self.context):
@@ -396,9 +416,17 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
     def __init__(self, model=None, device=None, hparams=dict(), name=None):
         super(RobustAutoEncoderPreTrainer, self).__init__(model, device, hparams, name)
 
+        input_limits = self.context['drmade'].decoder.output_limits
         pgd_eps = hparams.get('ae_input_pgd/eps', config.pretrain_ae_pgd_eps)
         pgd_iterations = hparams.get('ae_input_pgd/iterations', config.pretrain_ae_pgd_iterations)
+        pgd_alpha = hparams.get('ae_input_pgd/alpha', config.pretrain_ae_pgd_alpha)
         pgd_randomize = hparams.get('ae_input_pgd/randomize', config.pretrain_ae_pgd_randomize)
+
+        latent_limits = self.context['drmade'].encoder.output_limits
+        pgd_latent_eps = hparams.get('ae_latent_pgd/eps', config.pretrain_ae_latent_pgd_eps)
+        pgd_latent_eps = hparams.get('ae_latent_pgd/iterations', config.pretrain_ae_latent_pgd_iterations)
+        pgd_latent_eps = hparams.get('ae_latent_pgd/alpha', config.pretrain_ae_latent_pgd_iterations)
+        pgd_latent_randomize = hparams.get('ae_input_pgd/randomize', config.pretrain_ae_latent_pgd_randomize)
 
         base_lr = hparams.get('base_lr', config.base_lr)
         lr_decay = hparams.get('lr_decay', config.lr_decay)
@@ -424,10 +452,14 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         self.context['schedulers'] = [scheduler]
         self.context['scheduler/ae'] = scheduler
 
-        self.context['name'] = name or 'PreTrain-{}|pgd-eps{}-iterations{}{}|Adam-lr{}-half{}-decay{}'.format(
+        self.context[
+            'name'] = name or 'PreTrain-{}-{}:{}|pgd-eps{}-iterations{}alpha{}{}|Adam-lr{}-half{}-decay{}'.format(
             self.context['name'],
+            self.context['drmade'].encoder.name,
+            self.context['drmade'].decoder.name,
             pgd_eps,
             pgd_iterations,
+            pgd_alpha,
             'randomized' if pgd_randomize else '',
             base_lr,
             lr_half_schedule,
@@ -435,7 +467,7 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         )
         print("Pre Trainer: ", self.context['name'])
         attacker = PGDAttackAction(
-            AEForwardPass('ae'), eps=pgd_eps, iterations=pgd_iterations,
+            AEForwardPass('ae'), eps=pgd_eps, iterations=pgd_iterations, alpha=pgd_alpha,
             randomize=pgd_randomize)
 
         train_loop = RobustAEFeedLoop(

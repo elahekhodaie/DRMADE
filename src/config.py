@@ -31,14 +31,17 @@ decoder_use_bias = False
 decoder_bn_affine = False
 decoder_bn_eps = 1e-4
 decoder_num_layers = 2
-decoder_output_activation = 'tanh'  # '', tanh, sigmoid
+decoder_output_activation = 'sigmoid'  # '', tanh, sigmoid
 decoder_layers_activation = 'elu'  # leaky_relu, elu, relu
 decoder_distance_norm = 2
 decoder_distance_eps = 1e-5
 
 # training
+input_limits = (0., 1.)
 dataset = datasets.MNIST
 normal_classes = [1]
+input_rescaling = lambda x: x
+input_rescaling_inv = lambda x: x
 
 lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
 lr_half_schedule = 512  # interval of epochs to reduce learning rate 50%
@@ -58,10 +61,20 @@ parameters_regularization_factor = [0, 1]
 
 pretrain_ae_pgd_eps = 0.2
 pretrain_ae_pgd_iterations = 20
+pretrain_ae_pgd_alpha = 0.05
 pretrain_ae_pgd_randomize = False
+
+pretrain_ae_latent_pgd_eps = 0
+pretrain_ae_latent_pgd_iterations = 20
+pretrain_ae_latent_pgd_alpha = 0.05
+pretrain_ae_latent_pgd_randomize = False
 
 max_epoch = 2050
 
+checkpoint_drmade = None
+checkpoint_encoder = None
+checkpoint_decoder = None
+checkpoint_made = None
 # evaluation
 positive_is_anomaly = False
 

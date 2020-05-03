@@ -3,9 +3,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import src.config as config
 
-rescaling = lambda x: (x - .5) * 2.
-rescaling_inv = lambda x: .5 * x + .5
-default_transform = transforms.Compose([transforms.ToTensor(), rescaling])
+default_transform = transforms.Compose([transforms.ToTensor(), config.input_rescaling])
 
 
 class DatasetSelection(Dataset):

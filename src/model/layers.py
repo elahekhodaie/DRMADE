@@ -210,6 +210,20 @@ class MADE(nn.Module):
     def log_prob(self, features, output=None, parameters=None):
         return self.log_prob_hitmap(features, output, parameters).sum()
 
+    def load(self, path, device=None):
+        params = torch.load(path) if not device else torch.load(path, map_location=device)
+
+        added = 0
+        for name, param in params.items():
+            if name in self.state_dict().keys():
+                try:
+                    self.state_dict()[name].copy_(param)
+                    added += 1
+                except Exception as e:
+                    print(e)
+                    pass
+        print('loaded {:.2f}% of params made'.format(100 * added / float(len(self.state_dict().keys()))))
+
 
 class Encoder(nn.Module):
     def __init__(
@@ -279,13 +293,16 @@ class Encoder(nn.Module):
         if not self.latent_activation and self.latent_activation:
             nn.init.xavier_uniform_(self.fc1.weight, nn.init.calculate_gain(self.latent_activation))
 
+        self.output_limits = None
         self.activate_latent = (lambda x: x)
-        self.activate_latent = (lambda x: torch.tanh(x)) if self.latent_activation == 'tanh' else self.activate_latent
-        self.activate_latent = (lambda x: torch.nn.functional.leaky_relu(
-            x)) if self.latent_activation == 'leaky_relu' else self.activate_latent
-        self.activate_latent = (lambda x: torch.nn.functional.sigmoid(
-            x)) if self.latent_activation == 'sigmoid' else self.activate_latent
-
+        if self.latent_activation == 'tanh':
+            self.output_limits = (-1, 1.)
+            self.activate_latent = (lambda x: torch.tanh(x))
+        elif self.activate_latent == 'leaky_relu':
+            self.activate_latent = (lambda x: torch.nn.functional.leaky_relu(x))
+        elif self.activate_latent == 'sigmoid':
+            self.activate_latent = (lambda x: torch.nn.functional.sigmoid(x))
+            self.output_limits = (0.,)
         self.latent_bn = nn.BatchNorm1d(self.latent_size, eps=bn_eps, affine=bn_affine) if self.bn_latent else lambda \
                 x: x
 
@@ -320,6 +337,20 @@ class Encoder(nn.Module):
 
     def latent_var_regularization(self, features):
         return torch.sum(((features - features.sum(1, keepdim=True) / self.latent_size) ** 2).sum(1) / self.latent_size)
+
+    def load(self, path, device=None):
+        params = torch.load(path) if not device else torch.load(path, map_location=device)
+
+        added = 0
+        for name, param in params.items():
+            if name in self.state_dict().keys():
+                try:
+                    self.state_dict()[name].copy_(param)
+                    added += 1
+                except Exception as e:
+                    print(e)
+                    pass
+        print('loaded {:.2f}% of params encoder'.format(100 * added / float(len(self.state_dict().keys()))))
 
 
 class Decoder(nn.Module):
@@ -371,6 +402,7 @@ class Decoder(nn.Module):
         self.deconv_layers = []
         self.batch_norms = []
         self.layers = []
+        self.output_limits = None
         last_size = self.latent_image_size
         for i in range(self.num_layers + 1):
             n_input_channels = 2 ** (5 + self.num_layers - i) if i else self.latent_num_channels
@@ -406,8 +438,10 @@ class Decoder(nn.Module):
             else:
                 nn.init.xavier_uniform_(self.deconv_layers[i].weight, nn.init.calculate_gain(self.output_activation))
                 if self.output_activation == 'tanh':
+                    self.output_limits = (-1., 1.)
                     self.layers.append(nn.Tanh())
                 if self.layers_activation == 'sigmoid':
+                    self.output_limits = (0., 1.)
                     self.layers.append(nn.Sigmoid())
         self.deconv = nn.Sequential(*self.layers)
 
@@ -423,3 +457,17 @@ class Decoder(nn.Module):
     def distance(self, input_image, output_image, norm=2):
         return ((self.distance_hitmap(input_image, output_image) ** norm).sum(1).sum(1).sum(
             1) + config.decoder_distance_eps) ** (1 / norm)
+
+    def load(self, path, device=None):
+        params = torch.load(path) if not device else torch.load(path, map_location=device)
+
+        added = 0
+        for name, param in params.items():
+            if name in self.state_dict().keys():
+                try:
+                    self.state_dict()[name].copy_(param)
+                    added += 1
+                except Exception as e:
+                    print(e)
+                    pass
+        print('loaded {:.2f}% of params decoder'.format(100 * added / float(len(self.state_dict().keys()))))

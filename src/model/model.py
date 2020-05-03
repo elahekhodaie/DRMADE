@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 
 import torch as t
 import torch.nn as nn
@@ -78,7 +79,11 @@ class DRMADE(nn.Module):
         return sum([np.prod(p.size()) for p in self.parameters()])
 
     def save(self, path):
-        t.save(self.state_dict(), path)
+        Path(path).mkdir(parents=True, exist_ok=True)
+        t.save(self.state_dict(), f'{path}/drmade.pth')
+        t.save(self.encoder.state_dict(), f'{path}/encoder.pth')
+        t.save(self.decoder.state_dict(), f'{path}/decoder.pth')
+        t.save(self.made.state_dict(), f'{path}/made.pth')
 
     def load(self, path, device=None):
         params = t.load(path) if not device else t.load(path, map_location=device)
@@ -92,7 +97,7 @@ class DRMADE(nn.Module):
                 except Exception as e:
                     print(e)
                     pass
-        print('loaded {:.2f}% of params'.format(100 * added / float(len(self.state_dict().keys()))))
+        print('loaded {:.2f}% of params drmade'.format(100 * added / float(len(self.state_dict().keys()))))
 
     def forward_ae(self, x, features=None):
         if not features:

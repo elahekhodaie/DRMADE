@@ -30,17 +30,23 @@ class InputTransform:
     def is_active(self, context=None, loop_data: dict = None, **kwargs):
         return True
 
+    def changes_input_directly(self, context=None, loop_data: dict = None, **kwargs):
+        return True
+
     def dependency_input_names(self, context=None, loop_data: dict = None, **kwargs):
         result = []
         if not self.transformed_input:
-            return tuple()
+            return []
         if callable(self.transformed_input):
             result = self.transformed_input(context, loop_data, **kwargs)
         elif isinstance(self.transformed_input, Iterable):
-            result = list(self.transformed_input)
+            if isinstance(self.transformed_input, str):
+                result = [self.transformed_input]
+            else:
+                result = list(self.transformed_input)
         if not isinstance(result, Iterable) and not result:
             return []
-        if not isinstance(result, list):
+        if not isinstance(result, list) and result:
             return [result]
         return result
 
@@ -78,7 +84,7 @@ class Action:  # returns a single factor of loss / new_context (   input or ...
 
     def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
         if context is not None:
-            return context[f'{ACTION_FACTOR_PREFIX}{self.name}'] if self.is_active(context, **kwargs) else 0.
+            return context.get(f'{ACTION_FACTOR_PREFIX}{self.name}', 0) if self.is_active(context, **kwargs) else 0.
         return 1. if self.is_active(context, **kwargs) else 0.
 
     def dependency_input_names(self, context=None, loop_data: dict = None, **kwargs):
@@ -88,10 +94,13 @@ class Action:  # returns a single factor of loss / new_context (   input or ...
         if callable(self.transformed_input):
             result = self.transformed_input(context, loop_data, **kwargs)
         elif isinstance(self.transformed_input, Iterable):
-            result = list(self.transformed_input)
+            if isinstance(self.transformed_input, str):
+                result = [self.transformed_input]
+            else:
+                result = list(self.transformed_input)
         if not isinstance(result, Iterable) and not result:
             return []
-        if not isinstance(result, list):
+        if not isinstance(result, list) and result:
             return [result]
         return result
 
@@ -186,11 +195,15 @@ class Loop:
 
         for action in self.loss_actions:
             loop_data[f'{ACTION_FACTOR_PREFIX}{action.name}'] = 0.
+            loop_data[f'{ACTION_PREFIX}{action.name}/calls_count'] = 0
             loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}{action.name}'] = 0.
 
         with torch.set_grad_enabled(not self.no_grad_active(context, **kwargs)):
             for batch_idx, (inputs, outputs) in enumerate(data_loader):
                 inputs = inputs.to(device)
+                loop_data['inputs'] = inputs
+                loop_data['outputs'] = outputs
+
                 for input_tranfrom in self.input_transforms:
                     results = input_tranfrom(
                         inputs, outputs, context, loop_data=loop_data, **kwargs)
@@ -198,13 +211,15 @@ class Loop:
                         for name, value in results.items():
                             loop_data[f'{TRANSFORM_PREFIX}{input_tranfrom.name}{name}'] = value
                     else:
-                        loop_data[f'{TRANSFORM_PREFIX}{input_tranfrom.name}'] = results
+                        if input_tranfrom.changes_input_directly(context, loop_data, **kwargs):
+                            loop_data[f'{TRANSFORM_PREFIX}{input_tranfrom.name}'] = results
 
                 loss = 0.
                 for action in self.loss_actions:
                     factor = action.factor(context, loop_data=loop_data, **kwargs)
-                    loop_data[f'{ACTION_FACTOR_PREFIX}{action.name}'] += factor / len(data_loader)
                     if factor:
+                        loop_data[f'{ACTION_PREFIX}{action.name}/calls_count'] += 1
+                        loop_data[f'{ACTION_FACTOR_PREFIX}{action.name}'] += factor
                         result = action(
                             inputs, outputs, context, loop_data=loop_data, **kwargs)
                         loss += factor * result
@@ -226,15 +241,19 @@ class Loop:
                 if self.log_interval and (batch_idx + 1) % self.log_interval == 0:
                     print(
                         '\t{}\t{:3d}/{:3d} - loss : {:.4f}, time : {:.3f}s'.format(
-                            self.name, batch_idx, len(data_loader),
+                            self.name,
+                            batch_idx + 1,
+                            len(data_loader),
                             loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] / (1 + batch_idx),
                             time.time() - time_)
                     )
                     time_ = time.time()
 
         for item in loop_data:
-            if item.startswith(f'{RESULT_PREFIX}{SCALAR_PREFIX}') == 0:
-                loop_data[item] = loop_data[item] / len(data_loader)
+            if item.startswith(f'{RESULT_PREFIX}{SCALAR_PREFIX}'):
+                loop_data[item] /= len(data_loader)
+            if item.startswith(f'{ACTION_FACTOR_PREFIX}'):
+                loop_data[item] /= loop_data[f'{ACTION_PREFIX}{item[len(ACTION_FACTOR_PREFIX):]}/calls_count']
         self.loop_data = loop_data
         return loop_data
 
