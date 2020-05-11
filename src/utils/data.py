@@ -21,7 +21,7 @@ class DatasetSelection(Dataset):
                                   download=download)
         self.data = self.whole_data
         if classes is not None or return_indexes:
-            self.data = [(data, (label, index)) if True else (data, label) for index, (data, label) in
+            self.data = [(data, (label, index)) if return_indexes else (data, label) for index, (data, label) in
                          enumerate(self.whole_data)]
 
     def __len__(self):
