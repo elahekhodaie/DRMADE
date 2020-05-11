@@ -14,128 +14,12 @@ from src.utils.data import DatasetSelection
 from src.model.model import DRMADE
 import src.config as config
 
-from src.utils.train import Trainer, Action, InputTransform, Loop, DEVICE, LOOP_PREFIX
+from src.utils.train import Trainer, Action, Loop
+import src.utils.train.constants as constants
 
-
-class LatentRegularization(Action):
-    def __init__(self, name, function):
-        super(LatentRegularization, self).__init__(f'latent_regularization/{name}')
-        self.function = function
-
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return context['hparams'].get(f'{self.name}/factor', 0.)
-
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return context['hparams'].get(f'{self.name}/factor', 0.)
-
-    def __call__(self, inputs, outputs=None, context=None, loop_data: dict = None, **kwargs):
-        return self.function(context)(loop_data.get('false_features', loop_data.features))
-
-
-class PGDAttackAction(InputTransform):
-    def __init__(self, action, eps=0.2, alpha=0.05, iterations=20, randomize=True,
-                 input_limits=config.input_limits, transformed_input=None, ):
-        super(PGDAttackAction, self).__init__(f'pgd-{action.name}')
-        self.action = action
-        self.eps = eps
-        self.alpha = alpha
-        self.iterations = iterations
-        self.randomize = randomize
-        self.input_limits = input_limits
-        self.transformed_input = transformed_input
-
-    def dependency_inputs(self, context=None, loop_data: dict = None, **kwargs):
-        return tuple()
-
-    def is_active(self, context=None, loop_data: dict = None, **kwargs):
-        return self.eps != 0.
-
-    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
-        if self.transformed_input:
-            inputs = loop_data.get(self.transformed_input, inputs)
-        if self.randomize:
-            delta = torch.rand_like(inputs, requires_grad=True)
-            delta.data = delta.data * 2 * self.eps - self.eps
-        else:
-            delta = torch.zeros_like(inputs, requires_grad=True)
-
-        for i in range(self.iterations):
-            loss = self.action(inputs + delta, outputs, context=context, loop_data=loop_data)
-            loss.backward()
-            delta.data = (delta + self.alpha * delta.grad.detach().sign()).clamp(-self.eps, self.eps)
-            delta.grad.zero_()
-        if self.input_limits:
-            return (inputs + delta.detach()).clamp(*self.input_limits)
-        return inputs + delta.detach()
-
-
-class UniformNoiseInput(InputTransform):
-    def __init__(self, factor=0.2, input_limits=config.input_limits):
-        super(UniformNoiseInput, self).__init__('uniform_noise_input')
-        self.factor = factor
-        self.input_limits = input_limits
-
-    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None,
-                  dependency_inputs: dict = None, **kwargs):
-        result = inputs + self.factor * (
-                2 * torch.DoubleTensor(*inputs.shape).to(context[DEVICE]).uniform_() - 1)
-        if self.input_limits:
-            return result.clamp(*self.input_limits)
-        return result
-
-
-latent_cor_action = LatentRegularization('correlation',
-                                         lambda context: context["drmade"].encoder.latent_cor_regularization)
-latent_distance_action = LatentRegularization('distance',
-                                              lambda context: context["drmade"].encoder.latent_distance_regularization)
-latent_zero_action = LatentRegularization('zero',
-                                          lambda context: context["drmade"].encoder.latent_zero_regularization)
-latent_var_action = LatentRegularization('variance',
-                                         lambda context: context["drmade"].encoder.latent_var_regularization)
-
-
-class AEForwardPass(Action):
-    def __init__(self, name='', transformed_input=None):
-        super(AEForwardPass, self).__init__(name, transformed_input)
-
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
-
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
-
-    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
-        if dependency_inputs:
-            inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
-        features = None
-        if dependency_inputs:
-            features = dependency_inputs.get(f'pgd-latent', context["drmade"].encoder(inputs))
-        if features is None:
-            features = context["drmade"].encoder(inputs)
-        reconstructions = context["drmade"].decoder(features)
-        return context["drmade"].decoder.distance(loop_data['inputs'], reconstructions).sum()
-
-
-class EMadeForwardPass(Action):
-    def __init__(self, name='', transformed_input=None):
-        super(EMadeForwardPass, self).__init__(name, transformed_input)
-
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
-
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
-
-    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
-        if dependency_inputs:
-            inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
-        features = None
-        if dependency_inputs:
-            features = dependency_inputs.get(f'pgd-latent', context["drmade"].encoder(inputs))
-        if features is None:
-            features = context["drmade"].encoder(inputs)
-        return -context["drmade"].made.log_prob(features)
-
+from .input_transforms import PGDAttackAction, Encode
+from .actions import AEForwardPass, EncoderMadeForwardPass
+from .loops import RobustAEFeedLoop, RobustMadeFeedLoop
 
 hyper_parameters = {
     'dataset': config.dataset,
@@ -183,7 +67,7 @@ class DRMADETrainer(Trainer):
         context['max_epoch'] = hparams.get('max_epoch', config.max_epoch)
         # aquiring device cuda if available
         context['device'] = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print("device:", context[DEVICE])
+        print("device:", context[constants.DEVICE])
 
         print('loading training data')
         context['train_data'] = DatasetSelection(
@@ -226,23 +110,23 @@ class DRMADETrainer(Trainer):
             decoder_num_layers=hparams.get('decoder_num_layers', config.decoder_num_layers),
             decoder_layers_activation=hparams.get('decoder_layers_activation', config.decoder_layers_activation),
             decoder_output_activation=hparams.get('decoder_output_activation', config.decoder_output_activation),
-        ).to(context[DEVICE])
-        context["drmade"].encoder = context["drmade"].encoder.to(context[DEVICE])
-        context["drmade"].made = context["drmade"].made.to(context[DEVICE])
-        context["drmade"].decoder = context["drmade"].decoder.to(context[DEVICE])
+        ).to(context[constants.DEVICE])
+        context["drmade"].encoder = context["drmade"].encoder.to(context[constants.DEVICE])
+        context["drmade"].made = context["drmade"].made.to(context[constants.DEVICE])
+        context["drmade"].decoder = context["drmade"].decoder.to(context[constants.DEVICE])
 
         checkpoint_drmade = hparams.get('checkpoint_drmade', config.checkpoint_drmade)
         if checkpoint_drmade:
-            context["drmade"].load(checkpoint_drmade, context[DEVICE])
+            context["drmade"].load(checkpoint_drmade, context[constants.DEVICE])
         checkpoint_encoder = hparams.get('checkpoint_encoder', config.checkpoint_encoder)
         if checkpoint_encoder:
-            context["drmade"].encoder.load(checkpoint_encoder, context[DEVICE])
+            context["drmade"].encoder.load(checkpoint_encoder, context[constants.DEVICE])
         checkpoint_decoder = hparams.get('checkpoint_decoder', config.checkpoint_drmade)
         if checkpoint_decoder:
-            context["drmade"].decoder.load(checkpoint_decoder, context[DEVICE])
+            context["drmade"].decoder.load(checkpoint_decoder, context[constants.DEVICE])
         checkpoint_made = hparams.get('checkpoint_made', config.checkpoint_drmade)
         if checkpoint_made:
-            context["drmade"].made.load(checkpoint_made, context[DEVICE])
+            context["drmade"].made.load(checkpoint_made, context[constants.DEVICE])
 
         print(f'model: {context["drmade"].name} was initialized')
         # setting up tensorboard data summerizer
@@ -275,14 +159,14 @@ class DRMADETrainer(Trainer):
 
     def _evaluate_loop(self, data_loader, record_input_images=False, record_reconstructions=False):
         with torch.no_grad():
-            log_prob = torch.Tensor().to(self.context[DEVICE])
-            decoder_loss = torch.Tensor().to(self.context[DEVICE])
-            reconstructed_images = torch.Tensor().to(self.context[DEVICE])
-            features = torch.Tensor().to(self.context[DEVICE])
+            log_prob = torch.Tensor().to(self.context[constants.DEVICE])
+            decoder_loss = torch.Tensor().to(self.context[constants.DEVICE])
+            reconstructed_images = torch.Tensor().to(self.context[constants.DEVICE])
+            features = torch.Tensor().to(self.context[constants.DEVICE])
             labels = np.empty(0, dtype=np.int8)
-            input_images = torch.Tensor().to(self.context[DEVICE])
+            input_images = torch.Tensor().to(self.context[constants.DEVICE])
             for batch_idx, (images, label) in enumerate(data_loader):
-                images = images.to(self.context[DEVICE])
+                images = images.to(self.context[constants.DEVICE])
                 if record_input_images:
                     input_images = torch.cat((input_images, images), dim=0)
 
@@ -404,123 +288,13 @@ class DRMADETrainer(Trainer):
 
             for loop in self.context['loops']:
                 if loop.is_active(self.context):
-                    self.context[f'{LOOP_PREFIX}{loop.name}/data'] = loop(self.context)
+                    self.context[f'{constants.LOOP_PREFIX}{loop.name}/data'] = loop(self.context)
                     loop.submit_loop_data(self.context)
 
             for scheduler in self.context['schedulers']:
                 scheduler.step()
 
             self.submit_progress()
-
-
-class RobustAEFeedLoop(Loop):
-    def __init__(self, name, data_loader, device, optimizers=None, attacker=None, interval=1, log_interval=0):
-        attacker = attacker or PGDAttackAction(
-            AEForwardPass('ae'), eps=config.pretrain_ae_pgd_eps, iterations=config.pretrain_ae_pgd_iterations,
-            randomize=config.pretrain_ae_pgd_randomize, alpha=config.pretrain_ae_pgd_alpha)
-        super(RobustAEFeedLoop, self).__init__(
-            name,
-            data_loader,
-            device,
-            input_transforms=(attacker,),
-            loss_actions=(AEForwardPass('ae', 'pgd-ae'),),
-            optimizers=optimizers,
-            log_interval=log_interval
-        )
-        self.interval = interval
-
-    def is_active(self, context: dict = None, **kwargs):
-        return context['epoch'] % self.interval == 0
-
-
-class RobustMadeFeedLoop(Loop):
-    def __init__(self, name, data_loader, device, optimizers=None, attacker=None, interval=1, log_interval=0):
-        attacker = attacker or PGDAttackAction(
-            EMadeForwardPass('emade'), eps=config.pretrain_emade_pgd_eps,
-            iterations=config.pretrain_emade_pgd_iterations,
-            randomize=config.pretrain_emade_pgd_randomize, alpha=config.pretrain_emade_pgd_alpha)
-        super(RobustMadeFeedLoop, self).__init__(
-            name,
-            data_loader,
-            device,
-            input_transforms=(attacker,),
-            loss_actions=(EMadeForwardPass('emade', 'pgd-emade'),),
-            optimizers=optimizers,
-            log_interval=log_interval
-        )
-        self.interval = interval
-
-    def is_active(self, context: dict = None, **kwargs):
-        return context['epoch'] % self.interval == 0
-
-
-class RobustMadePreTrainer(DRMADETrainer):
-    def __init__(self, model=None, device=None, hparams=dict(), name=None):
-        super(RobustMadePreTrainer, self).__init__(model, device, hparams, name)
-
-        input_limits = self.context['drmade'].decoder.output_limits
-        pgd_eps = hparams.get('emade_input_pgd/eps', config.pretrain_emade_pgd_eps)
-        pgd_iterations = hparams.get('emade_input_pgd/iterations', config.pretrain_emade_pgd_iterations)
-        pgd_alpha = hparams.get('emade_input_pgd/alpha', config.pretrain_emade_pgd_alpha)
-        pgd_randomize = hparams.get('emade_input_pgd/randomize', config.pretrain_emade_pgd_randomize)
-
-        base_lr = hparams.get('base_lr', config.base_lr)
-        lr_decay = hparams.get('lr_decay', config.lr_decay)
-        lr_half_schedule = hparams.get('lr_half_schedule', config.lr_half_schedule)
-
-        print(f'initializing optimizer Adam - base_lr:{base_lr}')
-        optimizer = Adam(
-            self.context['drmade'].made.parameters(), lr=base_lr
-        )
-        self.context['optimizers'] = [optimizer]
-        self.context['optimizer/made'] = optimizer
-
-        print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_half_schedule}')
-        self.context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.5 if \
-            (epoch + 1) % lr_half_schedule == 0 else lr_decay
-        scheduler = lr_scheduler.MultiplicativeLR(
-            optimizer, lr_lambda=self.context['lr_multiplicative_factor_lambda'], last_epoch=-1)
-        self.context['schedulers'] = [scheduler]
-        self.context['scheduler/made'] = scheduler
-
-        self.context[
-            'name'] = name or 'PreTrain-{}-{}|pgd-eps{}-iterations{}alpha{}{}|Adam-lr{}-half{}-decay{}'.format(
-            self.context['name'],
-            self.context['drmade'].made.name,
-            pgd_eps,
-            pgd_iterations,
-            pgd_alpha,
-            'randomized' if pgd_randomize else '',
-            base_lr,
-            lr_half_schedule,
-            lr_decay,
-        )
-        print("Pre Trainer: ", self.context['name'])
-        attacker = PGDAttackAction(
-            EMadeForwardPass('emade'), eps=pgd_eps, iterations=pgd_iterations, alpha=pgd_alpha,
-            randomize=pgd_randomize, input_limits=input_limits)
-
-        train_loop = RobustMadeFeedLoop(
-            name='train',
-            data_loader=self.context['train_loader'],
-            device=self.context[DEVICE],
-            optimizers=('made',),
-            attacker=attacker,
-            log_interval=config.log_data_feed_loop_interval,
-        )
-
-        validation = RobustAEFeedLoop(
-            name='validation',
-            data_loader=self.context['validation_loader'],
-            device=self.context[DEVICE],
-            optimizers=tuple(),
-            attacker=attacker,
-            interval=hparams.get('validation_interval', config.validation_interval),
-            log_interval=config.log_data_feed_loop_interval,
-        )
-
-        self.context['loops'] = [validation, train_loop]
-        self.setup_writer()
 
 
 class RobustAutoEncoderPreTrainer(DRMADETrainer):
@@ -582,7 +356,7 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         train_loop = RobustAEFeedLoop(
             name='train',
             data_loader=self.context['train_loader'],
-            device=self.context[DEVICE],
+            device=self.context[constants.DEVICE],
             optimizers=('ae',),
             attacker=attacker,
             log_interval=config.log_data_feed_loop_interval,
@@ -591,7 +365,76 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         validation = RobustAEFeedLoop(
             name='validation',
             data_loader=self.context['validation_loader'],
-            device=self.context[DEVICE],
+            device=self.context[constants.DEVICE],
+            optimizers=tuple(),
+            attacker=attacker,
+            interval=hparams.get('validation_interval', config.validation_interval),
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        self.context['loops'] = [validation, train_loop]
+        self.setup_writer()
+
+
+class RobustMadePreTrainer(DRMADETrainer):
+    def __init__(self, model=None, device=None, hparams=dict(), name=None):
+        super(RobustMadePreTrainer, self).__init__(model, device, hparams, name)
+
+        input_limits = self.context['drmade'].decoder.output_limits
+        pgd_eps = hparams.get('encoder_made_input_pgd/eps', config.pretrain_encoder_made_pgd_eps)
+        pgd_iterations = hparams.get('encoder_made_input_pgd/iterations', config.pretrain_encoder_made_pgd_iterations)
+        pgd_alpha = hparams.get('encoder_made_input_pgd/alpha', config.pretrain_encoder_made_pgd_alpha)
+        pgd_randomize = hparams.get('v/randomize', config.pretrain_encoder_made_pgd_randomize)
+
+        base_lr = hparams.get('base_lr', config.base_lr)
+        lr_decay = hparams.get('lr_decay', config.lr_decay)
+        lr_half_schedule = hparams.get('lr_half_schedule', config.lr_half_schedule)
+
+        print(f'initializing optimizer Adam - base_lr:{base_lr}')
+        optimizer = Adam(
+            self.context['drmade'].made.parameters(), lr=base_lr
+        )
+        self.context['optimizers'] = [optimizer]
+        self.context['optimizer/made'] = optimizer
+
+        print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_half_schedule}')
+        self.context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.5 if \
+            (epoch + 1) % lr_half_schedule == 0 else lr_decay
+        scheduler = lr_scheduler.MultiplicativeLR(
+            optimizer, lr_lambda=self.context['lr_multiplicative_factor_lambda'], last_epoch=-1)
+        self.context['schedulers'] = [scheduler]
+        self.context['scheduler/made'] = scheduler
+
+        self.context[
+            'name'] = name or 'PreTrain-{}-{}|pgd-eps{}-iterations{}alpha{}{}|Adam-lr{}-half{}-decay{}'.format(
+            self.context['name'],
+            self.context['drmade'].made.name,
+            pgd_eps,
+            pgd_iterations,
+            pgd_alpha,
+            'randomized' if pgd_randomize else '',
+            base_lr,
+            lr_half_schedule,
+            lr_decay,
+        )
+        print("Pre Trainer: ", self.context['name'])
+        attacker = PGDAttackAction(
+            EncoderMadeForwardPass('encoder_made'), eps=pgd_eps, iterations=pgd_iterations, alpha=pgd_alpha,
+            randomize=pgd_randomize, input_limits=input_limits)
+
+        train_loop = RobustMadeFeedLoop(
+            name='train',
+            data_loader=self.context['train_loader'],
+            device=self.context[constants.DEVICE],
+            optimizers=('made',),
+            attacker=attacker,
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        validation = RobustMadeFeedLoop(
+            name='validation',
+            data_loader=self.context['validation_loader'],
+            device=self.context[constants.DEVICE],
             optimizers=tuple(),
             attacker=attacker,
             interval=hparams.get('validation_interval', config.validation_interval),

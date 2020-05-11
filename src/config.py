@@ -69,10 +69,15 @@ pretrain_ae_latent_pgd_iterations = 20
 pretrain_ae_latent_pgd_alpha = 0.05
 pretrain_ae_latent_pgd_randomize = False
 
-pretrain_emade_pgd_eps = 0.2
-pretrain_emade_pgd_iterations = 20
-pretrain_emade_pgd_alpha = 0.05
-pretrain_emade_pgd_randomize = False
+pretrain_made_pgd_eps = 0
+pretrain_made_pgd_iterations = 1
+pretrain_made_pgd_alpha = 0.05
+pretrain_made_pgd_randomize = False
+
+pretrain_encoder_made_pgd_eps = 0.2
+pretrain_encoder_made_pgd_iterations = 1
+pretrain_encoder_made_pgd_alpha = 0.05
+pretrain_encoder_made_pgd_randomize = False
 
 max_epoch = 2050
 
@@ -89,7 +94,7 @@ seed = 1  # Random seed to use
 # data
 # data loader
 train_batch_size = 512
-validation_batch_size = 128
+validation_batch_size = 512
 test_batch_size = 512
 dataloader_num_workers = 4
 dataloader_pin_memory = True

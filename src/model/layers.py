@@ -203,12 +203,20 @@ class MADE(nn.Module):
             return result
         self.update_masks()
         for i in range(self.num_masks - 1):
-            result += self._log_prob_hitmap(features)
+            result += self._log_prob_hitmap(features).clone()
             self.update_masks()
         return result / self.num_masks
 
     def log_prob(self, features, output=None, parameters=None):
-        return self.log_prob_hitmap(features, output, parameters).sum()
+        result = 0.
+        result += self._log_prob_hitmap(features, output, parameters).sum()
+        if output is not None or parameters is not None:
+            return result
+        self.update_masks()
+        for i in range(self.num_masks - 1):
+            result += self._log_prob_hitmap(features).sum()
+            self.update_masks()
+        return result / self.num_masks
 
     def load(self, path, device=None):
         params = torch.load(path) if not device else torch.load(path, map_location=device)

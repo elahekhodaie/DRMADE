@@ -15,12 +15,14 @@ class DatasetSelection(Dataset):
                  transform=default_transform,
                  target_transform=lambda x: x,
                  download=True,
+                 return_indexes=False
                  ):
         self.whole_data = dataset(root, train, transform=transform, target_transform=target_transform,
                                   download=download)
         self.data = self.whole_data
-        if classes is not None:
-            self.data = [point for point in self.whole_data if point[1] in classes]
+        if classes is not None or return_indexes:
+            self.data = [(data, (label, index)) if True else (data, label) for index, (data, label) in
+                         enumerate(self.whole_data)]
 
     def __len__(self):
         return len(self.data)
