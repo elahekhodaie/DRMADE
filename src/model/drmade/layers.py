@@ -54,7 +54,7 @@ class MADE(nn.Module):
               will be all the means and the second nin will be stds. i.e. output dimensions depend on the
               same input dimensions in "chunks" and should be carefully decoded downstream appropriately.
               the output of running the tests for this file makes this a bit more clear with examples.
-        num_masks: can be used to train ensemble over orderings/connections
+        num_masks: can be used to drmade ensemble over orderings/connections
         natural_ordering: force natural ordering of dimensions, don'torch use random permutations
         """
 

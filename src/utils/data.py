@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import src.config as config
+import numpy as np
 
 default_transform = transforms.Compose([transforms.ToTensor(), config.input_rescaling])
 
@@ -17,12 +18,18 @@ class DatasetSelection(Dataset):
                  download=True,
                  return_indexes=False
                  ):
+        self.return_indexes = return_indexes
         self.whole_data = dataset(root, train, transform=transform, target_transform=target_transform,
                                   download=download)
         self.data = self.whole_data
-        if classes is not None or return_indexes:
-            self.data = [(data, (label, index)) if return_indexes else (data, label) for index, (data, label) in
-                         enumerate(self.whole_data)]
+        if classes is not None:
+            self.data = [(data, label) for data, label in self.whole_data if label in classes]
+            self.labels = np.array([label for data, label in self.whole_data if label in classes])
+        else:
+            self.labels = np.array([label for data, label in self.whole_data])
+
+        if return_indexes:
+            self.data = [(data, (label, index)) for index, (data, label) in enumerate(self.data)]
 
     def __len__(self):
         return len(self.data)

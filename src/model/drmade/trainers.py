@@ -11,13 +11,13 @@ tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 from sklearn.metrics import roc_auc_score
 from src.utils.data import DatasetSelection
-from src.model.model import DRMADE
+from src.model.drmade.model import DRMADE
 import src.config as config
 
-from src.utils.train import Trainer, Action, Loop
+from src.utils.train import Trainer
 import src.utils.train.constants as constants
 
-from .input_transforms import PGDAttackAction, Encode
+from .input_transforms import PGDAttackAction
 from .actions import AEForwardPass, EncoderMadeForwardPass
 from .loops import RobustAEFeedLoop, RobustMadeFeedLoop
 
@@ -248,15 +248,15 @@ class DRMADETrainer(Trainer):
         log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
             self.context['train_loader'], record_extreme_cases, record_extreme_cases)
 
-        self.context['writer'].add_histogram(f'loss/decoder/train',
+        self.context['writer'].add_histogram(f'loss/decoder/drmade',
                                              decoder_loss, self.context["epoch"])
-        self.context['writer'].add_histogram(f'loss/made/train',
+        self.context['writer'].add_histogram(f'loss/made/drmade',
                                              log_prob, self.context["epoch"])
 
-        self._submit_latent(features, 'train')
+        self._submit_latent(features, 'drmade')
 
         if record_extreme_cases:
-            self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'train')
+            self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'drmade')
         self.context['writer'].flush()
 
     def _submit_embedding(self):
@@ -354,7 +354,7 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
             randomize=pgd_randomize, input_limits=input_limits)
 
         train_loop = RobustAEFeedLoop(
-            name='train',
+            name='drmade',
             data_loader=self.context['train_loader'],
             device=self.context[constants.DEVICE],
             optimizers=('ae',),
@@ -423,7 +423,7 @@ class RobustMadePreTrainer(DRMADETrainer):
             randomize=pgd_randomize, input_limits=input_limits)
 
         train_loop = RobustMadeFeedLoop(
-            name='train',
+            name='drmade',
             data_loader=self.context['train_loader'],
             device=self.context[constants.DEVICE],
             optimizers=('made',),
@@ -443,3 +443,4 @@ class RobustMadePreTrainer(DRMADETrainer):
 
         self.context['loops'] = [validation, train_loop]
         self.setup_writer()
+

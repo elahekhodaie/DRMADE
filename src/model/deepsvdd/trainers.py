@@ -1,0 +1,261 @@
+from src.utils.train import Trainer
+from src.utils.train import constants
+from src.utils.data import DatasetSelection
+import torch
+import numpy as np
+import src.config as config
+from .model import DeepSVDD
+from torch.optim import lr_scheduler, SGD
+from torch.utils.tensorboard import SummaryWriter
+from pathlib import Path
+from sklearn.metrics import roc_auc_score
+from .actions import Radius
+from src.model.drmade.input_transforms import PGDAttackAction
+
+from .loops import RobustDeepSVDDLoop
+
+
+class DeepSVDDTrainer(Trainer):
+    def __init__(
+            self,
+            model=None,
+            device=None,
+            hparams=dict(),
+            name='',
+    ):
+        # reproducibility
+        torch.manual_seed(config.seed)
+        np.random.seed(config.seed)
+        torch.set_default_tensor_type('torch.FloatTensor')
+
+        context = dict()
+        context['hparams'] = hparams
+        context['max_epoch'] = hparams.get('max_epoch', config.max_epoch)
+        context['normal_classes'] = hparams.get('normal_classes', config.normal_classes)
+
+        # acquiring device cuda if available
+        context[constants.DEVICE] = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("device:", context[constants.DEVICE])
+
+        print('loading training data')
+        context['train_data'] = DatasetSelection(
+            hparams.get('dataset', config.dataset),
+            classes=hparams.get('normal_classes', config.normal_classes), train=True, return_indexes=True)
+        print('loading test data')
+        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False)
+
+        context['input_shape'] = context['train_data'].input_shape()
+
+        print('initializing data loaders')
+        context['train_loader'] = context['train_data'].get_dataloader(
+            shuffle=True, batch_size=hparams.get('train_batch_size', config.train_batch_size))
+        context['test_loader'] = context['test_data'].get_dataloader(
+            shuffle=False, batch_size=hparams.get('test_batch_size', config.test_batch_size))
+
+        print('initializing model')
+        context['model'] = model or DeepSVDD(
+            train_data=context['train_data'],
+            latent_size=hparams.get('latent_size', config.deepsvdd_latent_size),
+            temperature=hparams.get('temperature', config.deepsvdd_temperature),
+            k=hparams.get('k', config.deepsvdd_k)
+        ).to(context[constants.DEVICE])
+        context["model"].resnet = context["model"].resnet.to(context[constants.DEVICE])
+        print('initializing center - ', end='')
+        context["model"].init_center(
+            context[constants.DEVICE], init_zero=hparams.get('zero_centered', False))
+        print(context["model"].center)
+        print('initializing memory')
+        context["model"].init_memory(context[constants.DEVICE])
+
+        checkpoint = hparams.get('checkpoint', config.checkpoint_drmade)
+        if checkpoint:
+            context["model"].load(checkpoint, context[constants.DEVICE])
+
+        print(f'model: {context["model"].name} was initialized')
+
+        base_lr = hparams.get('base_lr', config.deepsvdd_sgd_base_lr)
+        lr_decay = hparams.get('lr_decay', config.deepsvdd_sgd_lr_decay)
+        lr_schedule = hparams.get('lr_schedule', config.deepsvdd_sgd_schedule)
+
+        pgd_eps = hparams.get('pgd/eps', config.deepsvdd_pgd_eps)
+        pgd_iterations = hparams.get('pgd/iterations', config.deepsvdd_pgd_iterations)
+        pgd_alpha = hparams.get('pgd/alpha', config.deepsvdd_pgd_alpha)
+        pgd_randomize = hparams.get('pgd/randomize', config.deepsvdd_pgd_randomize)
+
+        print(f'initializing optimizer SGD - base_lr:{base_lr}')
+        optimizer = SGD(
+            context['model'].resnet.parameters(), lr=base_lr
+        )
+        context['optimizers'] = [optimizer]
+        context['optimizer/sgd'] = optimizer
+
+        print(f'initializing learning rate scheduler - lr_decay:{lr_decay} half_schedule:{lr_schedule}')
+        context['lr_multiplicative_factor_lambda'] = lambda epoch: 0.1 \
+            if (epoch + 1) % lr_schedule == 0 else lr_decay
+        scheduler = lr_scheduler.MultiplicativeLR(
+            optimizer, lr_lambda=context['lr_multiplicative_factor_lambda'], last_epoch=-1)
+        context['schedulers'] = [scheduler]
+        context['scheduler/sgd'] = scheduler
+
+        # setting up tensorboard data summerizer
+        context['name'] = name or '{}{}-{}{}|SGD-baselr{}-decay{}-0.1schedule{}'.format(
+            hparams.get('dataset', config.dataset).__name__,
+            '{}'.format(
+                '' if not context['normal_classes'] else '[' + ','.join(
+                    str(i) for i in hparams.get('normal_classes', config.normal_classes)) + ']'
+            ),
+            context['model'].name,
+            '' if not pgd_eps else '|pgd-eps{}-iterations{}alpha{}{}'.format(
+                pgd_eps, pgd_iterations, pgd_alpha, 'randomized' if pgd_randomize else '',
+            ),
+            base_lr,
+            lr_decay,
+            lr_schedule,
+        )
+        super(DeepSVDDTrainer, self).__init__(context['name'], context, )
+
+        attacker = PGDAttackAction(
+            Radius('radius'), eps=pgd_eps, iterations=pgd_iterations,
+            randomize=pgd_randomize, alpha=pgd_alpha)
+
+        train_loop = RobustDeepSVDDLoop(
+            name='train',
+            data_loader=context['train_loader'],
+            device=context[constants.DEVICE],
+            optimizers=('sgd',),
+            attacker=attacker,
+            log_interval=config.log_data_feed_loop_interval,
+        )
+
+        self.context['loops'] = [train_loop]
+        print('setting up writer')
+        self.setup_writer()
+        print('trainer', context['name'], 'is ready!')
+
+    def setup_writer(self, output_root=None):
+        self.context['output_root'] = output_root if output_root else self.context['hparams'].get(
+            'output_root', config.output_root)
+        self.context['models_dir'] = f'{self.context["output_root"]}/models'
+        self.context['check_point_saving_dir'] = f'{self.context["models_dir"]}/{self.context["name"]}'
+
+        self.context['runs_dir'] = f'{self.context["output_root"]}/runs'
+
+        # ensuring the existance of output directories
+        Path(self.context['output_root']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['models_dir']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['check_point_saving_dir']).mkdir(parents=True, exist_ok=True)
+        Path(self.context['runs_dir']).mkdir(parents=True, exist_ok=True)
+
+        self.context['writer'] = SummaryWriter(
+            log_dir=f'{self.context["runs_dir"]}/{self.context["name"]}')
+
+    def save_model(self, output_path=None):
+        output_path = output_path or self.context['check_point_saving_dir']
+        self.context['model'].save(output_path + f'/{self.context["name"]}-E{self.context["epoch"]}.pth')
+
+    def _evaluate_loop(self, data_loader, record_input_images=False):
+        with torch.no_grad():
+            features = torch.Tensor().to(self.context[constants.DEVICE])
+            labels = np.empty(0, dtype=np.int8)
+            input_images = torch.Tensor().to(self.context[constants.DEVICE])
+            radii = torch.Tensor().to(self.context[constants.DEVICE])
+            for batch_idx, (images, output) in enumerate(data_loader):
+                label = output if not data_loader.dataset.return_indexes else output[0]
+                images = images.to(self.context[constants.DEVICE])
+                if record_input_images:
+                    input_images = torch.cat((input_images, images), dim=0)
+                radii = torch.cat((radii, self.context['model'].radius_hitmap(images)), dim=0)
+                features = torch.cat((features, self.context["model"](images)), dim=0)
+                labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
+        return radii, features, labels, input_images
+
+    def _calculate_accuracy(self):
+        top_1_accuracy, top_5_accuracy = 0., 0.
+        for images, labels in self.context['test_loader']:
+            images = images.to(self.context[constants.DEVICE])
+            labels = labels.numpy()
+            result = self.context['model'].classify(images)
+            for index, top5 in enumerate(result):
+                if labels[index] in top5:
+                    top_5_accuracy += 1
+                if labels[index] == top5[0]:
+                    top_1_accuracy += 1
+        return top_1_accuracy / (len(self.context['test_loader']) * images.shape[0]), \
+               top_5_accuracy / (len(self.context['test_loader']) * images.shape[0])
+
+    def _submit_latent(self, features, title=''):
+        for i in range(features.shape[1]):
+            self.context['writer'].add_histogram(f'latent/{title}/{i}', features[:, i], self.context["epoch"])
+
+    def evaluate(self, ):
+        with torch.no_grad():
+            top1, top5 = self._calculate_accuracy()
+            self.context['writer'].add_scalar(f'accuracy/top1', top1, self.context["epoch"])
+            self.context['writer'].add_scalar(f'accuracy/top5', top5, self.context["epoch"])
+            print('top1, top5:', top1, top5)
+
+            print('evaluation loop test')
+            radii, features, labels, images = self._evaluate_loop(self.context['test_loader'])
+
+            if self.context['normal_classes']:
+                self.context['writer'].add_scalar(
+                    f'auc/radii',
+                    roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                                  y_score=(-radii).cpu()), self.context["epoch"])
+
+                anomaly_indexes = (
+                        np.isin(labels, self.context['hparams'].get('normal_classes', config.normal_classes)) == False)
+                self.context['writer'].add_histogram(f'loss/radii/test/anomaly',
+                                                     radii[anomaly_indexes], self.context["epoch"])
+                self.context['writer'].add_histogram(f'loss/radii/test/normal',
+                                                     radii[(anomaly_indexes == False)],
+                                                     self.context["epoch"])
+
+                self._submit_latent(features[anomaly_indexes], 'test/anomaly')
+                self._submit_latent(features[(anomaly_indexes == False)], 'test/normal')
+            else:
+                self._submit_latent(features, 'test')
+
+            print('evaluation loop train')
+
+            radii, features, labels, images = self._evaluate_loop(self.context['train_loader'])
+
+            self.context['writer'].add_histogram(f'loss/radii/train',
+                                                 radii, self.context["epoch"])
+            self._submit_latent(features, 'train')
+            self.context['writer'].flush()
+
+    def submit_embedding(self):
+        radii, features, labels, images = self._evaluate_loop(
+            self.context['test_loader'], record_input_images=True, )
+        self.context['writer'].add_embedding(features, metadata=labels, label_img=images,
+                                             global_step=self.context['epoch'],
+                                             tag=self.context['name'])
+        self.context['writer'].flush()
+
+    def train(self):
+        evaluation_interval = self.context['hparams'].get('evaluation_interval', config.evaluation_interval)
+        embedding_interval = self.context['hparams'].get('embedding_interval', config.embedding_interval)
+        save_interval = self.context['hparams'].get('save_interval', config.save_interval)
+
+        for epoch in range(self.context['hparams'].get('start_epoch', 0), self.context['max_epoch']):
+            self.context['epoch'] = epoch
+            print(f'epoch {self.context["epoch"]:5d}')
+            if evaluation_interval and epoch % evaluation_interval == 0:
+                self.evaluate()
+
+            if embedding_interval and (epoch + 1) % embedding_interval == 0:
+                self.submit_embedding()
+
+            if save_interval and (epoch + 1) % save_interval == 0:
+                self.save_model()
+
+            for loop in self.context['loops']:
+                if loop.is_active(self.context):
+                    self.context[f'{constants.LOOP_PREFIX}{loop.name}/data'] = loop(self.context)
+                    loop.submit_loop_data(self.context)
+
+            for scheduler in self.context['schedulers']:
+                scheduler.step()
+
+            self.submit_progress()

@@ -10,7 +10,8 @@ class Loop:
             data_loader=None,
             device=None,
             loss_actions=tuple(),  # a list of LossActions
-            context_actions=tuple(),  # a list of ContextActions
+            after_optimization_context_actions=tuple(),  # a list of ContextActions
+            before_optimization_context_actions=tuple(),
             input_transforms=tuple(),
             optimizers=tuple(),  # a list of optimizer names
             log_interval=0,
@@ -21,7 +22,8 @@ class Loop:
         self.optimizers = optimizers
         self.data_loader = data_loader
         self.input_transforms = input_transforms
-        self.context_actions = context_actions
+        self.before_optimization_context_actions = before_optimization_context_actions
+        self.after_optimization_context_actions = after_optimization_context_actions
         self.loss_actions = loss_actions
 
         self.log_interval = log_interval
@@ -107,7 +109,7 @@ class Loop:
 
                 loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] += loss
 
-                for action in self.context_actions:
+                for action in self.before_optimization_context_actions:
                     if action.is_active(context, loop_data=loop_data, **kwargs):
                         action(inputs, outputs, context, loop_data=loop_data, **kwargs)
 
@@ -117,6 +119,10 @@ class Loop:
                     loss.backward()
                     for optimizer_name in self.optimizers:
                         context[f'{OPTIMIZER_PREFIX}{optimizer_name}'].step()
+
+                for action in self.after_optimization_context_actions:
+                    if action.is_active(context, loop_data=loop_data, **kwargs):
+                        action(inputs, outputs, context, loop_data=loop_data, **kwargs)
 
                 if self.log_interval and (batch_idx + 1) % self.log_interval == 0:
                     print(

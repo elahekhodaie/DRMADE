@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch as t
 import torch.nn as nn
-from src.model.layers import Encoder, MADE, Decoder
+from src.model.drmade.layers import Encoder, MADE, Decoder
 import src.config as config
 
 

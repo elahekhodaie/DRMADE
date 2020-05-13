@@ -37,11 +37,11 @@ decoder_distance_norm = 2
 decoder_distance_eps = 1e-5
 
 # training
-input_limits = (0., 1.)
-dataset = datasets.MNIST
+input_limits = (-1., 1.)
+dataset = datasets.CIFAR10
 normal_classes = [1]
-input_rescaling = lambda x: x
-input_rescaling_inv = lambda x: x
+input_rescaling = lambda x: (x - .5) * 2.
+input_rescaling_inv = lambda x: x * .5 + .5
 
 lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
 lr_half_schedule = 512  # interval of epochs to reduce learning rate 50%
@@ -93,9 +93,9 @@ seed = 1  # Random seed to use
 
 # data
 # data loader
-train_batch_size = 512
-validation_batch_size = 512
-test_batch_size = 512
+train_batch_size = 256
+validation_batch_size = 256
+test_batch_size = 256
 dataloader_num_workers = 4
 dataloader_pin_memory = True
 dataloader_shuffle = True
@@ -111,6 +111,21 @@ track_weights_interval = 64
 log_data_feed_loop_interval = 8
 log_evaluation_loop_interval = 8
 num_extreme_cases = 16
+
+# deepsvdd
+deepsvdd_lambda = 0.5
+deepsvdd_temperature = 0.07
+deepsvdd_k = 200
+deepsvdd_latent_size = 32
+
+deepsvdd_sgd_base_lr = 3e-2
+deepsvdd_sgd_lr_decay = 0.999995
+deepsvdd_sgd_schedule = 40
+
+deepsvdd_pgd_eps = 0
+deepsvdd_pgd_iterations = 20
+deepsvdd_pgd_alpha = 0.05
+deepsvdd_pgd_randomize = False
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset
