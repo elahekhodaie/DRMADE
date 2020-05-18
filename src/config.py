@@ -112,21 +112,6 @@ log_data_feed_loop_interval = 8
 log_evaluation_loop_interval = 8
 num_extreme_cases = 16
 
-# deepsvdd
-deepsvdd_lambda = 0.5
-deepsvdd_temperature = 0.07
-deepsvdd_k = 200
-deepsvdd_latent_size = 32
-
-deepsvdd_sgd_base_lr = 3e-2
-deepsvdd_sgd_lr_decay = 0.999995
-deepsvdd_sgd_schedule = 40
-
-deepsvdd_pgd_eps = 0
-deepsvdd_pgd_iterations = 20
-deepsvdd_pgd_alpha = 0.05
-deepsvdd_pgd_randomize = False
-
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset
 Path(data_dir).mkdir(parents=True, exist_ok=True)

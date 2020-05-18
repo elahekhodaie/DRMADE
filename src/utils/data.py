@@ -18,6 +18,8 @@ class DatasetSelection(Dataset):
                  download=True,
                  return_indexes=False
                  ):
+        self.transform=transform
+        self.target_transform=target_transform
         self.return_indexes = return_indexes
         self.whole_data = dataset(root, train, transform=transform, target_transform=target_transform,
                                   download=download)
