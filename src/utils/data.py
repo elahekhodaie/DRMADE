@@ -1,5 +1,4 @@
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, Subset, DataLoader
 from torchvision import datasets, transforms
 import src.config as config
 import numpy as np
@@ -18,26 +17,27 @@ class DatasetSelection(Dataset):
                  download=True,
                  return_indexes=False
                  ):
-        self.transform=transform
-        self.target_transform=target_transform
+        self.transform = transform
+        self.target_transform = target_transform
         self.return_indexes = return_indexes
         self.whole_data = dataset(root, train, transform=transform, target_transform=target_transform,
                                   download=download)
         self.data = self.whole_data
+        self.labels = np.array(self.data.targets)
         if classes is not None:
-            self.data = [(data, label) for data, label in self.whole_data if label in classes]
-            self.labels = np.array([label for data, label in self.whole_data if label in classes])
-        else:
-            self.labels = np.array([label for data, label in self.whole_data])
-
-        if return_indexes:
-            self.data = [(data, (label, index)) for index, (data, label) in enumerate(self.data)]
+            classes = np.array(classes)
+            selection = np.isin(self.labels, classes)
+            self.data = Subset(self.data, np.arange(len(self.labels))[selection])
+            self.labels = self.labels[selection]
 
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, item):
-        return self.data[item]
+    def __getitem__(self, index):
+        inputs, targets = self.data[index]
+        if self.return_indexes:
+            return inputs, (targets, index)
+        return inputs, targets
 
     def input_shape(self):
         return self.data[0][0].shape

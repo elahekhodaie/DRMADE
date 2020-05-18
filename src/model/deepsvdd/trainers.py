@@ -56,10 +56,10 @@ class DeepSVDDTrainer(Trainer):
         print('loading training data')
         context['train_data'] = DatasetSelection(
             hparams.get('dataset', config.dataset),
-            classes=hparams.get('normal_classes', config.normal_classes), train=True, return_indexes=True,
+            classes=context['normal_classes'], train=True, return_indexes=True,
             transform=transform_train)
         print('loading test data')
-        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False,
+        context['test_data'] = DatasetSelection(context['normal_classes'], train=False,
                                                 transform=transform_test)
 
         context['input_shape'] = context['train_data'].input_shape()
@@ -271,10 +271,11 @@ class DeepSVDDTrainer(Trainer):
 
     def evaluate(self, ):
         with torch.no_grad():
-            top1, top5 = self.knn_accuracy()
-            self.context['writer'].add_scalar(f'accuracy/top1', top1, self.context["epoch"])
-            self.context['writer'].add_scalar(f'accuracy/top5', top5, self.context["epoch"])
-            print('top1, top5:', top1, top5)
+            if not self.context['normal_classes']:
+                top1, top5 = self.knn_accuracy()
+                self.context['writer'].add_scalar(f'accuracy/top1', top1, self.context["epoch"])
+                self.context['writer'].add_scalar(f'accuracy/top5', top5, self.context["epoch"])
+                print('top1, top5:', top1, top5)
 
             print('evaluation loop test')
             radii, features, labels, images = self._evaluate_loop(self.context['test_loader'])
@@ -282,11 +283,12 @@ class DeepSVDDTrainer(Trainer):
             if self.context['normal_classes']:
                 self.context['writer'].add_scalar(
                     f'auc/radii',
-                    roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+                    roc_auc_score(y_true=np.isin(labels, self.context['normal_classes']).astype(np.int8),
                                   y_score=(-radii).cpu()), self.context["epoch"])
 
                 anomaly_indexes = (
-                        np.isin(labels, self.context['hparams'].get('normal_classes', config.normal_classes)) == False)
+                        np.isin(labels,
+                                self.context['hparams'].get('normal_classes', self.context['normal_classes'])) == False)
                 self.context['writer'].add_histogram(f'loss/radii/test/anomaly',
                                                      radii[anomaly_indexes], self.context["epoch"])
                 self.context['writer'].add_histogram(f'loss/radii/test/normal',
@@ -299,7 +301,6 @@ class DeepSVDDTrainer(Trainer):
                 self._submit_latent(features, 'test')
 
             print('evaluation loop train')
-
             radii, features, labels, images = self._evaluate_loop(self.context['train_loader'])
 
             self.context['writer'].add_histogram(f'loss/radii/train',

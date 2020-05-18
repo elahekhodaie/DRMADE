@@ -64,7 +64,8 @@ class Loop:
     ):
         if self.verbose:
             print(f'loop: {self.name} - setting up loop_data context')
-        loop_data = dict()
+        loop_data = self.loop_data
+        loop_data.clear()
         assert (data_loader is None and self.data_loader is not None) or data_loader is not None, \
             f'no data_loader specified - loop:{self.name}'
         data_loader = self.data_loader or data_loader
@@ -112,10 +113,11 @@ class Loop:
                 loss = 0.
                 for action in self.loss_actions:
                     factor = action.factor(context, loop_data=loop_data, **kwargs)
-                    active = action.is_active(context,loop_data,**kwargs)
+                    active = action.is_active(context, loop_data, **kwargs)
                     if self.verbose:
                         print(
-                            f'\t\t* calling loss_action {action.name}-active:{active} - factor: {factor} - term_loss:', end='')
+                            f'\t\t* calling loss_action {action.name}-active:{active} - factor: {factor} - term_loss:',
+                            end='')
                     if active:
                         loop_data[f'{ACTION_PREFIX}{action.name}/calls_count'] += 1
                         loop_data[f'{ACTION_FACTOR_PREFIX}{action.name}'] += factor
@@ -126,9 +128,9 @@ class Loop:
                         if self.verbose:
                             print(
                                 f'{result} - total_loss:{loss}')
-                        loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}{action.name}'] += result
+                        loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}{action.name}'] += result / inputs.shape[0]
 
-                loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] += loss
+                loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] += loss / inputs.shape[0]
 
                 for action in self.before_optimization_context_actions:
                     if action.is_active(context, loop_data=loop_data, **kwargs):

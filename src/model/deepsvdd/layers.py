@@ -153,7 +153,6 @@ class NCEFunction(Function):
 
 
 class NCEAverage(nn.Module):
-
     def __init__(self, inputSize, outputSize, K, T=0.07, momentum=0.5, Z=None, device='cpu'):
         super(NCEAverage, self).__init__()
         self.nLem = outputSize
@@ -161,14 +160,14 @@ class NCEAverage(nn.Module):
         self.multinomial = AliasMethod(self.unigrams)
         self.multinomial.to(device)
         self.K = K
-
-        self.register_buffer('params', torch.tensor([K, T, -1, momentum]));
+        self.device = device
+        self.register_buffer('params', torch.tensor([K, T, -1, momentum]))
         stdv = 1. / math.sqrt(inputSize / 3)
         self.register_buffer('memory', torch.rand(outputSize, inputSize).mul_(2 * stdv).add_(-stdv))
 
     def forward(self, x, y):
         batchSize = x.size(0)
-        idx = self.multinomial.draw(batchSize * (self.K + 1)).view(batchSize, -1)
+        idx = self.multinomial.draw(batchSize * (self.K + 1)).view(batchSize, -1).to(self.device)
         out = NCEFunction.apply(x, y, self.memory, idx, self.params)
         return out
 

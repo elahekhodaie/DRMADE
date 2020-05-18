@@ -4,11 +4,6 @@ from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 import numpy as np
 
-import tensorflow as tf
-import tensorboard as tb
-
-tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
-
 from sklearn.metrics import roc_auc_score
 from src.utils.data import DatasetSelection
 from src.model.drmade.model import DRMADE
@@ -65,6 +60,8 @@ class DRMADETrainer(Trainer):
         context = dict()
         context['hparams'] = hparams
         context['max_epoch'] = hparams.get('max_epoch', config.max_epoch)
+        context['normal_classes'] = hparams.get('normal_classes', config.normal_classes)
+
         # aquiring device cuda if available
         context['device'] = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("device:", context[constants.DEVICE])
@@ -215,7 +212,7 @@ class DRMADETrainer(Trainer):
 
         self.context['writer'].add_scalar(
             f'auc/decoder',
-            roc_auc_score(y_true=np.isin(labels, config.normal_classes).astype(np.int8),
+            roc_auc_score(y_true=np.isin(labels, self.context['normal_classes']).astype(np.int8),
                           y_score=(-decoder_loss).cpu()), self.context["epoch"])
         self.context['writer'].add_scalar(
             f'auc/made',
