@@ -39,8 +39,10 @@ class NCE(Action):
         if dependency_inputs:
             inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
         labels, indexes = outputs
+        labels = labels.to(context[constants.DEVICE])
+        indexes = indexes.to(context[constants.DEVICE])
         features = context["model"](inputs) - context["model"].center
-        out = context["model"].lemniscate(features, indexes)
+        out = context["model"].lemniscate(features, indexes).to(context[constants.DEVICE])
 
         return context["model"].criterion(out, indexes)
 
