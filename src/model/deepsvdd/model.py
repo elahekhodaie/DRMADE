@@ -5,6 +5,7 @@ import torchvision
 
 import numpy as np
 from pathlib import Path
+from src.model.deepsvdd.layers import NCEAverage, LinearAverage, NCECriterion
 
 
 class DeepSVDD(nn.Module):
@@ -14,8 +15,10 @@ class DeepSVDD(nn.Module):
             latent_size,
             norm=2,
             norm_eps=1e-10,
-            temperature=0.07,
-            k=200,
+            nce_t=0.07,
+            nce_k=0,
+            nce_m=0,
+            device='cpu',
     ):
         super(DeepSVDD, self).__init__()
         self.train_data = train_data
@@ -23,23 +26,33 @@ class DeepSVDD(nn.Module):
         self.norm = norm
         self.norm_eps = norm_eps
 
-        self.temperature = temperature
-        self.k = k
+        self.nce_t = nce_t
+        self.nce_k = nce_k
+        self.nce_m = nce_m
 
         # initializing network
-        self.resnet = torchvision.models.resnet18()
+        self.resnet = torchvision.models.resnet18().to(device)
         num_ftrs = self.resnet.fc.in_features
-        self.resnet.fc = nn.Linear(num_ftrs, latent_size)
+        self.resnet.fc = nn.Linear(num_ftrs, latent_size).to(device)
 
         # initializing center & memory
-        self.center = None
-        self.memory = None
-        self.memory_size = len(self.train_data)
+        if self.nce_k > 0:
+            self.lemniscate = NCEAverage(latent_size, len(train_data), nce_k, nce_t, nce_m, device)
+        else:
+            self.lemniscate = LinearAverage(latent_size, len(train_data), nce_t, nce_m)
 
-        self.name = 'Resnet18-{}temp{}k{}'.format(
+        if hasattr(self.lemniscate, 'K'):
+            self.criterion = NCECriterion(len(train_data)).to(device)
+        else:
+            self.criterion = nn.CrossEntropyLoss().to(device)
+
+        self.center = None
+
+        self.name = 'Resnet18-{}:t{}k{}m{}'.format(
             self.latent_size,
-            self.temperature,
-            self.k,
+            self.nce_t,
+            self.nce_k,
+            self.nce_m,
         )
 
     def forward(self, input):

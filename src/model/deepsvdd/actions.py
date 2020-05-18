@@ -1,6 +1,7 @@
 from src.utils.train import Action
 from src.utils.train import constants
 import src.config as config
+import src.model.deepsvdd.config as model_config
 
 
 class LogProb(Action):
@@ -22,12 +23,34 @@ class LogProb(Action):
         return - context["model"].log_prob(inputs, indexes)
 
 
+class NCE(Action):
+    def __init__(self, name, transformed_input=None):
+        super(NCE, self).__init__(name, transformed_input=transformed_input)
+
+    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return context['hparams'].get('nce_factor', model_config.nce_factor)
+
+    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
+        return True
+
+    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
+        assert self.transformed_input is None or self.transformed_input in dependency_inputs, \
+            f'Action/{self.name} transformed input {self.transformed_input} not specified'
+        if dependency_inputs:
+            inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
+        labels, indexes = outputs
+        features = context["model"](inputs) - context["model"].center
+        out = context["model"].lemniscate(features, indexes)
+
+        return context["model"].criterion(out, indexes)
+
+
 class IterationDifference(Action):
     def __init__(self, name, transformed_input=None):
         super(IterationDifference, self).__init__(name, transformed_input=transformed_input)
 
     def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return context['hparams'].get('lambda', config.deepsvdd_lambda)
+        return context['hparams'].get('lambda', model_config.deepsvdd_lambda)
 
     def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
         return True
@@ -46,7 +69,7 @@ class Radius(Action):
         super(Radius, self).__init__(name, transformed_input=transformed_input)
 
     def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
+        return context['hparams'].get('radius_factor', model_config.radius_factor)
 
     def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
         return True

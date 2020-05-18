@@ -4,6 +4,7 @@ from src.utils.data import DatasetSelection
 import torch
 import numpy as np
 import src.config as config
+import src.model.deepsvdd.config as model_config
 from .model import DeepSVDD
 from torch.optim import lr_scheduler, SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -12,7 +13,9 @@ from sklearn.metrics import roc_auc_score
 from .actions import Radius
 from src.model.drmade.input_transforms import PGDAttackAction
 
-from .loops import RobustDeepSVDDLoop
+from .loops import RobustDeepSVDDLoop, RobustNCEDeepSVDDLoop
+import torchvision.transforms as transforms
+import src.model.deepsvdd.custom_transforms as custom_transforms
 
 
 class DeepSVDDTrainer(Trainer):
@@ -37,12 +40,27 @@ class DeepSVDDTrainer(Trainer):
         context[constants.DEVICE] = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("device:", context[constants.DEVICE])
 
+        transform_train = transforms.Compose([
+            transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+            transforms.RandomGrayscale(p=0.2),
+            # transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
         print('loading training data')
         context['train_data'] = DatasetSelection(
             hparams.get('dataset', config.dataset),
-            classes=hparams.get('normal_classes', config.normal_classes), train=True, return_indexes=True)
+            classes=hparams.get('normal_classes', config.normal_classes), train=True, return_indexes=True,
+            transform=transform_train)
         print('loading test data')
-        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False)
+        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False,
+                                                transform=transform_test)
 
         context['input_shape'] = context['train_data'].input_shape()
 
@@ -55,36 +73,42 @@ class DeepSVDDTrainer(Trainer):
         print('initializing model')
         context['model'] = model or DeepSVDD(
             train_data=context['train_data'],
-            latent_size=hparams.get('latent_size', config.deepsvdd_latent_size),
-            temperature=hparams.get('temperature', config.deepsvdd_temperature),
-            k=hparams.get('k', config.deepsvdd_k)
+            latent_size=hparams.get('latent_size', model_config.latent_size),
+            nce_t=hparams.get('nce_t', model_config.nce_t),
+            nce_k=hparams.get('nce_k', model_config.nce_k),
+            nce_m=hparams.get('nce_m', model_config.nce_m),
+            device=device
         ).to(context[constants.DEVICE])
         context["model"].resnet = context["model"].resnet.to(context[constants.DEVICE])
         print('initializing center - ', end='')
         context["model"].init_center(
             context[constants.DEVICE], init_zero=hparams.get('zero_centered', False))
-        print(context["model"].center)
-        print('initializing memory')
-        context["model"].init_memory(context[constants.DEVICE])
-
+        print(context["model"].center.mean())
         checkpoint = hparams.get('checkpoint', config.checkpoint_drmade)
         if checkpoint:
             context["model"].load(checkpoint, context[constants.DEVICE])
 
         print(f'model: {context["model"].name} was initialized')
 
-        base_lr = hparams.get('base_lr', config.deepsvdd_sgd_base_lr)
-        lr_decay = hparams.get('lr_decay', config.deepsvdd_sgd_lr_decay)
-        lr_schedule = hparams.get('lr_schedule', config.deepsvdd_sgd_schedule)
+        base_lr = hparams.get('base_lr', model_config.deepsvdd_sgd_base_lr)
+        lr_decay = hparams.get('lr_decay', model_config.deepsvdd_sgd_lr_decay)
+        lr_schedule = hparams.get('lr_schedule', model_config.deepsvdd_sgd_schedule)
 
-        pgd_eps = hparams.get('pgd/eps', config.deepsvdd_pgd_eps)
-        pgd_iterations = hparams.get('pgd/iterations', config.deepsvdd_pgd_iterations)
-        pgd_alpha = hparams.get('pgd/alpha', config.deepsvdd_pgd_alpha)
-        pgd_randomize = hparams.get('pgd/randomize', config.deepsvdd_pgd_randomize)
+        sgd_momentum = hparams.get('sgd_momentum', model_config.deepsvdd_sgd_momentum)
+        sgd_weight_decay = hparams.get('sgd_weight_deecay', model_config.deepsvdd_sgd_weight_decay)
+        pgd_eps = hparams.get('pgd/eps', model_config.deepsvdd_pgd_eps)
+        pgd_iterations = hparams.get('pgd/iterations', model_config.deepsvdd_pgd_iterations)
+        pgd_alpha = hparams.get('pgd/alpha', model_config.deepsvdd_pgd_alpha)
+        pgd_randomize = hparams.get('pgd/randomize', model_config.deepsvdd_pgd_randomize)
+
+        radius_factor = hparams.get('radius_factor', model_config.radius_factor)
+        nce_factor = hparams.get('nce_factor', model_config.nce_factor)
 
         print(f'initializing optimizer SGD - base_lr:{base_lr}')
         optimizer = SGD(
-            context['model'].resnet.parameters(), lr=base_lr
+            context['model'].resnet.parameters(), lr=base_lr,
+            momentum=sgd_momentum,
+            weight_decay=sgd_weight_decay,
         )
         context['optimizers'] = [optimizer]
         context['optimizer/sgd'] = optimizer
@@ -98,16 +122,20 @@ class DeepSVDDTrainer(Trainer):
         context['scheduler/sgd'] = scheduler
 
         # setting up tensorboard data summerizer
-        context['name'] = name or '{}{}-{}{}|SGD-baselr{}-decay{}-0.1schedule{}'.format(
+        context['name'] = name or '{}{}-{}{}{}{}|SGDm{}wd{}-baselr{}-decay{}-0.1schedule{}'.format(
             hparams.get('dataset', config.dataset).__name__,
             '{}'.format(
                 '' if not context['normal_classes'] else '[' + ','.join(
                     str(i) for i in hparams.get('normal_classes', config.normal_classes)) + ']'
             ),
             context['model'].name,
+            f'|NCE{nce_factor}' if nce_factor else '',
+            f'|Radius{radius_factor}' if radius_factor else '',
             '' if not pgd_eps else '|pgd-eps{}-iterations{}alpha{}{}'.format(
                 pgd_eps, pgd_iterations, pgd_alpha, 'randomized' if pgd_randomize else '',
             ),
+            sgd_momentum,
+            sgd_weight_decay,
             base_lr,
             lr_decay,
             lr_schedule,
@@ -118,7 +146,7 @@ class DeepSVDDTrainer(Trainer):
             Radius('radius'), eps=pgd_eps, iterations=pgd_iterations,
             randomize=pgd_randomize, alpha=pgd_alpha)
 
-        train_loop = RobustDeepSVDDLoop(
+        train_loop = RobustNCEDeepSVDDLoop(
             name='train',
             data_loader=context['train_loader'],
             device=context[constants.DEVICE],
@@ -165,9 +193,63 @@ class DeepSVDDTrainer(Trainer):
                 if record_input_images:
                     input_images = torch.cat((input_images, images), dim=0)
                 radii = torch.cat((radii, self.context['model'].radius_hitmap(images)), dim=0)
-                features = torch.cat((features, self.context["model"](images)), dim=0)
+                features = torch.cat((features, self.context["model"](images) - self.context['model'].center), dim=0)
                 labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
         return radii, features, labels, input_images
+
+    def knn_accuracy(self, K=200, recompute_memory=False):
+        self.context['model'].eval()
+        total = 0
+        testsize = self.context['test_loader'].dataset.__len__()
+        trainFeatures = self.context['model'].lemniscate.memory.t()
+
+        trainLabels = torch.LongTensor(self.context['train_loader'].dataset.labels).to(self.context[constants.DEVICE])
+        C = trainLabels.max() + 1
+        if recompute_memory:
+            transform_bak = self.context['train_loader'].dataset.transform
+            self.context['train_loader'].dataset.transform = self.context['test_loader'].dataset.transform
+            temploader = self.context['train_data'].get_dataloader(shuffle=False, batch_size=100)
+            for batch_idx, (images, outputs) in enumerate(temploader):
+                images = images.to(self.context[constants.DEVICE])
+                targets, indexes = outputs
+                batchSize = images.size(0)
+                features = self.context['model'](images) - self.context['model'].center
+                trainFeatures[:, batch_idx * batchSize:batch_idx * batchSize + batchSize] = features.data.t()
+            trainLabels = torch.LongTensor(temploader.dataset.labels).to(self.context[constants.DEVICE])
+            self.context['train_loader'].dataset.transform = transform_bak
+
+        top1 = 0.
+        top5 = 0.
+        with torch.no_grad():
+            retrieval_one_hot = torch.zeros(K, C).to(self.context[constants.DEVICE])
+            for batch_idx, (images, outputs) in enumerate(self.context['test_loader']):
+                images = images.to(self.context[constants.DEVICE])
+                outputs = outputs.to(self.context[constants.DEVICE])
+                batchSize = images.size(0)
+                features = self.context['model'](images) - self.context['model'].center
+
+                dist = torch.mm(features, trainFeatures)
+
+                yd, yi = dist.topk(K, dim=1, largest=True, sorted=True)
+                candidates = trainLabels.view(1, -1).expand(batchSize, -1)
+                retrieval = torch.gather(candidates, 1, yi)
+
+                retrieval_one_hot.resize_(batchSize * K, C).zero_()
+                retrieval_one_hot.scatter_(1, retrieval.view(-1, 1), 1)
+                yd_transform = yd.clone().div_(self.context['model'].nce_t).exp_()
+                probs = torch.sum(
+                    torch.mul(retrieval_one_hot.view(batchSize, -1, C), yd_transform.view(batchSize, -1, 1)), 1)
+                _, predictions = probs.sort(1, True)
+
+                # Find which predictions match the target
+                correct = predictions.eq(outputs.data.view(-1, 1))
+
+                top1 = top1 + correct.narrow(1, 0, 1).sum().item()
+                top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+
+                total += outputs.size(0)
+
+        return top1 / total, top5 / total
 
     def _calculate_accuracy(self):
         top_1_accuracy, top_5_accuracy = 0., 0.
@@ -189,7 +271,7 @@ class DeepSVDDTrainer(Trainer):
 
     def evaluate(self, ):
         with torch.no_grad():
-            top1, top5 = self._calculate_accuracy()
+            top1, top5 = self.knn_accuracy()
             self.context['writer'].add_scalar(f'accuracy/top1', top1, self.context["epoch"])
             self.context['writer'].add_scalar(f'accuracy/top5', top5, self.context["epoch"])
             print('top1, top5:', top1, top5)
