@@ -97,7 +97,7 @@ class Loop:
                 for input_tranform in self.input_transforms:
                     if self.verbose:
                         print(
-                            f'\t\t* calling transform {input_tranform.name}-active:{input_tranform.is_active(context, loop_data, **kwargs)}')
+                            f'\t\t* calling transform {input_tranform.name} | active:{input_tranform.is_active(context, loop_data, **kwargs)}')
                     results = input_tranform(
                         inputs, outputs, context, loop_data=loop_data, **kwargs)
                     if isinstance(results, dict):
@@ -110,13 +110,13 @@ class Loop:
                         if input_tranform.changes_input_directly(context, loop_data, **kwargs):
                             loop_data[f'{TRANSFORM_PREFIX}{input_tranform.name}'] = results
 
-                loss = 0.
+                loss = torch.zeros(1).to(device)
                 for action in self.loss_actions:
                     factor = action.factor(context, loop_data=loop_data, **kwargs)
                     active = action.is_active(context, loop_data, **kwargs)
                     if self.verbose:
                         print(
-                            f'\t\t* calling loss_action {action.name}-active:{active} - factor: {factor} - term_loss:',
+                            f'\t\t* calling loss_action {action.name} | active:{active} - factor: {factor} - term_loss:',
                             end='')
                     if active:
                         loop_data[f'{ACTION_PREFIX}{action.name}/calls_count'] += 1
@@ -128,9 +128,9 @@ class Loop:
                         if self.verbose:
                             print(
                                 f'{result} - total_loss:{loss}')
-                        loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}{action.name}'] += result / inputs.shape[0]
+                        loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}{action.name}'] += result.data / inputs.shape[0]
 
-                loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] += loss / inputs.shape[0]
+                loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] += loss.data / inputs.shape[0]
 
                 for action in self.before_optimization_context_actions:
                     if action.is_active(context, loop_data=loop_data, **kwargs):
@@ -153,9 +153,8 @@ class Loop:
                             self.name,
                             batch_idx + 1,
                             len(data_loader),
-                            loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] / (1 + batch_idx),
-                            time.time() - time_)
-                    )
+                            loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'].item() / (1 + batch_idx),
+                            time.time() - time_))
                     time_ = time.time()
 
         for item in loop_data:

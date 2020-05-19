@@ -59,7 +59,7 @@ class DeepSVDDTrainer(Trainer):
             classes=context['normal_classes'], train=True, return_indexes=True,
             transform=transform_train)
         print('loading test data')
-        context['test_data'] = DatasetSelection(context['normal_classes'], train=False,
+        context['test_data'] = DatasetSelection(hparams.get('dataset', config.dataset), train=False,
                                                 transform=transform_test)
 
         context['input_shape'] = context['train_data'].input_shape()
@@ -152,7 +152,7 @@ class DeepSVDDTrainer(Trainer):
             device=context[constants.DEVICE],
             optimizers=('sgd',),
             attacker=attacker,
-            log_interval=config.log_data_feed_loop_interval,
+            log_interval=hparams.get('log_interval', config.log_data_feed_loop_interval),
         )
 
         self.context['loops'] = [train_loop]
