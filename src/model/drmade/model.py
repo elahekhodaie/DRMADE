@@ -4,8 +4,7 @@ from pathlib import Path
 import torch as t
 import torch.nn as nn
 from src.model.drmade.layers import Encoder, MADE, Decoder
-import src.config as config
-
+import src.model.drmade.config as model_config
 
 class DRMADE(nn.Module):
     def __init__(
@@ -13,21 +12,21 @@ class DRMADE(nn.Module):
             input_size,
             num_channels,
             latent_size,
-            made_hidden_layers=config.made_hidden_layers,
-            made_natural_ordering=config.made_natural_ordering,
-            num_masks=config.made_num_masks,
-            num_mix=config.num_mix,
-            num_dist_parameters=config.num_dist_parameters,
-            distribution=config.distribution,
-            parameters_transform=config.parameters_transform,
-            parameters_min=config.paramteres_min_value,
-            encoder_num_layers=config.encoder_num_layers,
-            encoder_layers_activation=config.encoder_layers_activation,
-            encoder_latent_activation=config.encoder_latent_activation,
-            encoder_latent_bn=config.encoder_bn_latent,
-            decoder_num_layers=config.decoder_num_layers,
-            decoder_layers_activation=config.decoder_layers_activation,
-            decoder_output_activation=config.decoder_output_activation,
+            made_hidden_layers=model_config.made_hidden_layers,
+            made_natural_ordering=model_config.made_natural_ordering,
+            num_masks=model_config.made_num_masks,
+            num_mix=model_config.num_mix,
+            num_dist_parameters=model_config.num_dist_parameters,
+            distribution=model_config.distribution,
+            parameters_transform=model_config.parameters_transform,
+            parameters_min=model_config.paramteres_min_value,
+            encoder_num_layers=model_config.encoder_num_layers,
+            encoder_layers_activation=model_config.encoder_layers_activation,
+            encoder_latent_activation=model_config.encoder_latent_activation,
+            encoder_latent_bn=model_config.encoder_bn_latent,
+            decoder_num_layers=model_config.decoder_num_layers,
+            decoder_layers_activation=model_config.decoder_layers_activation,
+            decoder_output_activation=model_config.decoder_output_activation,
             name=None,
     ):
         super(DRMADE, self).__init__()

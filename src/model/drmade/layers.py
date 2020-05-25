@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import src.config as config
+import src.model.drmade.config as model_config
 
 
 class Interpolate(nn.Module):
@@ -19,7 +19,7 @@ class Interpolate(nn.Module):
 class MaskedLinear(nn.Linear):
     """ same as Linear except has a configurable mask on the weights """
 
-    def __init__(self, in_features, out_features, bias=config.made_use_biases):
+    def __init__(self, in_features, out_features, bias=model_config.made_use_biases):
         super().__init__(in_features, out_features, bias)
         self.register_buffer('mask', torch.ones(out_features, in_features))
 
@@ -36,14 +36,14 @@ class MADE(nn.Module):
             nin,
             hidden_sizes,
             nout,
-            num_masks=config.made_num_masks,
-            bias=config.made_use_biases,
-            natural_ordering=config.made_natural_ordering,
-            num_dist_parameters=config.num_dist_parameters,
-            distribution=config.distribution,
-            parameters_transform=config.parameters_transform,
-            parameters_min=config.paramteres_min_value,
-            num_mix=config.num_mix,
+            num_masks=model_config.made_num_masks,
+            bias=model_config.made_use_biases,
+            natural_ordering=model_config.made_natural_ordering,
+            num_dist_parameters=model_config.num_dist_parameters,
+            distribution=model_config.distribution,
+            parameters_transform=model_config.parameters_transform,
+            parameters_min=model_config.paramteres_min_value,
+            num_mix=model_config.num_mix,
             name=None,
     ):
         """
@@ -240,12 +240,12 @@ class Encoder(nn.Module):
             latent_size,
             input_size,
             num_layers,
-            bias=config.encoder_use_bias,
-            bn_affine=config.encoder_bn_affine,
-            bn_eps=config.encoder_bn_eps,
-            bn_latent=config.encoder_bn_latent,
-            layers_activation=config.encoder_layers_activation,
-            latent_activation=config.encoder_latent_activation,
+            bias=model_config.encoder_use_bias,
+            bn_affine=model_config.encoder_bn_affine,
+            bn_eps=model_config.encoder_bn_eps,
+            bn_latent=model_config.encoder_bn_latent,
+            layers_activation=model_config.encoder_layers_activation,
+            latent_activation=model_config.encoder_latent_activation,
             name=None,
     ):
         super(Encoder, self).__init__()
@@ -325,12 +325,13 @@ class Encoder(nn.Module):
     def latent_cor_regularization(self, features):
         norm_features = features / ((features ** 2).sum(1, keepdim=True) ** 0.5).repeat(1, self.latent_size)
         correlations = norm_features @ norm_features.reshape(self.latent_size, -1)
-        if config.latent_cor_regularization_abs:
+        if model_config.latent_cor_regularization_abs:
             return (torch.abs(correlations)).sum()
         return correlations.sum()
 
     def latent_distance_regularization(
-            self, features, use_norm=config.latent_distance_normalize_features, norm=config.latent_distance_norm
+            self, features, use_norm=model_config.latent_distance_normalize_features,
+            norm=model_config.latent_distance_norm
     ):
         batch_size = features.shape[0]
         vec = features
@@ -340,7 +341,7 @@ class Encoder(nn.Module):
         b = vec.repeat(batch_size, 1).reshape(-1, batch_size, self.latent_size)
         return (1 / ((torch.abs(a - b) ** norm + 1).sum(2) ** (1 / norm))).sum()
 
-    def latent_zero_regularization(self, features, eps=config.latent_zero_regularization_eps):
+    def latent_zero_regularization(self, features, eps=model_config.latent_zero_regularization_eps):
         return torch.sum(1.0 / (eps + torch.abs(features)))
 
     def latent_var_regularization(self, features):
@@ -368,11 +369,11 @@ class Decoder(nn.Module):
             latent_size,
             output_size,
             num_layers,
-            layers_activation=config.decoder_layers_activation,
-            output_activation=config.decoder_output_activation,
-            bias=config.decoder_use_bias,
-            bn_affine=config.decoder_bn_affine,
-            bn_eps=config.decoder_bn_eps,
+            layers_activation=model_config.decoder_layers_activation,
+            output_activation=model_config.decoder_output_activation,
+            bias=model_config.decoder_use_bias,
+            bn_affine=model_config.decoder_bn_affine,
+            bn_eps=model_config.decoder_bn_eps,
             name=None
     ):
         super().__init__()
@@ -464,7 +465,7 @@ class Decoder(nn.Module):
 
     def distance(self, input_image, output_image, norm=2):
         return ((self.distance_hitmap(input_image, output_image) ** norm).sum(1).sum(1).sum(
-            1) + config.decoder_distance_eps) ** (1 / norm)
+            1) + model_config.decoder_distance_eps) ** (1 / norm)
 
     def load(self, path, device=None):
         params = torch.load(path) if not device else torch.load(path, map_location=device)

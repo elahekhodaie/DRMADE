@@ -7,27 +7,25 @@ import torch
 class PGDAttackAction(InputTransform):
     def __init__(self, action, eps=0.2, alpha=0.05, iterations=20, randomize=True,
                  input_limits=config.input_limits, transformed_input=None, ):
-        super(PGDAttackAction, self).__init__(f'pgd-{action.name}')
-        self.action = action
         self.eps = eps
+        self.action = action
         self.alpha = alpha
         self.iterations = iterations
         self.randomize = randomize
         self.input_limits = input_limits
-        self.transformed_input = transformed_input
+        super(PGDAttackAction, self).__init__(
+            f'pgd-{action.name}', active=True,
+            transformed_input=transformed_input)
 
-    def dependency_inputs(self, context=None, loop_data: dict = None, **kwargs):
-        return tuple()
-
-    def is_active(self, context=None, loop_data: dict = None, **kwargs):
-        return self.eps != 0.
-
-    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
+    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs: dict = None,
+                  *args, **kwargs):
         assert self.transformed_input is None or f'{constants.TRANSFORM_PREFIX}{self.transformed_input}' in loop_data, \
             f'InputTransform/{self.name} transformed input {self.transformed_input} not specified in loop_data'
         if self.transformed_input:
-            inputs = loop_data.get[f'{constants.TRANSFORM_PREFIX}{self.transformed_input}'].detach()
-            inputs.requires_grad = False
+            inputs = dependency_inputs[self.transformed_input].data
+        if not self.eps:
+            print(self.name, 'not active')
+            return inputs
         if self.randomize:
             delta = torch.rand_like(inputs, requires_grad=True)
             delta.data = delta.data * 2 * self.eps - self.eps
@@ -39,26 +37,21 @@ class PGDAttackAction(InputTransform):
             delta.data = (delta + self.alpha * delta.grad.detach().sign()).clamp(-self.eps, self.eps)
             delta.grad.zero_()
         if self.input_limits:
-            return (inputs + delta.detach()).clamp(*self.input_limits)
-        return inputs + delta.detach()
+            return (inputs + delta.data).clamp(*self.input_limits)
+        return inputs + delta.data
 
 
 class Encode(InputTransform):
-    def __init__(self, transformed_input=None):
-        super(Encode, self).__init__(f'encoded_inputs')
+    def __init__(self, name='encode', transformed_input=None):
+        super(Encode, self).__init__(name)
         self.transformed_input = transformed_input
 
-    def dependency_inputs(self, context=None, loop_data: dict = None, **kwargs):
-        return tuple()
-
-    def is_active(self, context=None, loop_data: dict = None, **kwargs):
-        return True
-
-    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, *args, **kwargs):
+    def transform(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs: dict = None,
+                  *args, **kwargs):
         assert self.transformed_input is None or f'{constants.TRANSFORM_PREFIX}{self.transformed_input}' in loop_data, \
             f'InputTransform/{self.name} transformed input {self.transformed_input} not specified in loop_data'
         if self.transformed_input:
-            inputs = loop_data[f'{constants.TRANSFORM_PREFIX}{self.transformed_input}']
+            inputs = dependency_inputs[self.transformed_input].data
         return context['drmade'].encoder(inputs)
 
 

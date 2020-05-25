@@ -6,11 +6,12 @@ import torch
 
 class LatentRegularization(Action):
     def __init__(self, name, function):
-        super(LatentRegularization, self).__init__(f'latent_regularization/{name}')
+        super(LatentRegularization, self).__init__(
+            f'latent_regularization/{name}',
+            factor=f'action_factor/{name}',
+            active=lambda context, loop_data, **kwargs: context[constants.HPARAMS_DICT].get(f'action_factor/{name}', 0.)
+        )
         self.function = function
-
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return context['hparams'].get(f'{self.name}/factor', 0.)
 
     def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
         return context['hparams'].get(f'{self.name}/factor', 0.)
@@ -29,60 +30,46 @@ latent_var_action = LatentRegularization('variance',
                                          lambda context: context["drmade"].encoder.latent_var_regularization)
 
 
-class AEForwardPass(Action):
-    def __init__(self, name='', transformed_input=None):
-        super(AEForwardPass, self).__init__(name, transformed_input)
+class EncoderAction(Action):
+    def __init__(self, name='', input_transform=None, latent_transform=None, encode=False, factor=1., active=True):
+        transforms = []
+        if input_transform is not None:
+            transforms.append(input_transform)
+        if latent_transform is not None:
+            transforms.append(latent_transform)
+        self.latent_transform = latent_transform
+        self.input_transform = input_transform
+        self.encode = encode
+        super(EncoderAction, self).__init__(name, transforms, factor=factor, active=active)
 
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
-
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
-
-    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
-        if dependency_inputs:
-            inputs = dependency_inputs.get(f'pgd-{self.name}', inputs)
-        features = None
-        if dependency_inputs:
-            features = dependency_inputs.get(f'pgd-latent', context["drmade"].encoder(inputs))
-        if features is None:
-            features = context["drmade"].encoder(inputs)
-        reconstructions = context["drmade"].decoder(features)
-        return context["drmade"].decoder.distance(loop_data['inputs'], reconstructions).sum()
-
-
-class MadeForwardPass(Action):
-    def __init__(self, name='', transformed_input=None):
-        super(MadeForwardPass, self).__init__(name, transformed_input)
-
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
-
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
+    def function(self, context, loop_data, inputs, latent, outputs, **kwargs):
+        raise NotImplemented
 
     def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
-        assert self.transformed_input is None or f'{constants.TRANSFORM_PREFIX}{self.transformed_input}' in loop_data, \
-            f'Action/{self.name} transformed input {self.transformed_input} not specified in loop_data'
-        if self.transformed_input:
-            inputs = loop_data[f'{constants.TRANSFORM_PREFIX}{self.transformed_input}']
-        return -context["drmade"].made.log_prob(inputs)
+        assert self.input_transform is None or self.input_transform in dependency_inputs, \
+            f'Action/{self.name} transformed input {self.input_transform} not specified in loop_data'
+        assert self.latent_transform is None or self.latent_transform in dependency_inputs, \
+            f'Action/{self.name} transformed input {self.input_transform} not specified in loop_data'
+        inputs = dependency_inputs.get(self.input_transform, inputs)
+        latent = dependency_inputs.get(
+            self.latent_transform, context['drmade'].encoder(inputs) if self.encode else inputs)
+        return self.function(context, loop_data, inputs, latent, outputs)
 
 
-class EncoderMadeForwardPass(Action):
-    def __init__(self, name='', transformed_input=None):
-        super(EncoderMadeForwardPass, self).__init__(name, transformed_input)
+class EncoderDecoderForwardPass(EncoderAction):
+    def __init__(self, name='', input_transform=None, latent_transform=None, encode=True, factor=1., active=True):
+        super(EncoderDecoderForwardPass, self).__init__(
+            name, input_transform, latent_transform, encode=encode, factor=factor, active=active)
 
-    def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return 1.
+    def function(self, context, loop_data, inputs, latent, outputs, **kwargs):
+        reconstruction = context['drmade'].decoder(latent)
+        return context['drmade'].decoder.distance(loop_data['inputs'], reconstruction).sum()
 
-    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
 
-    def action(self, inputs, outputs=None, context=None, loop_data: dict = None, dependency_inputs=None, **kwargs):
-        assert self.transformed_input is None or f'{constants.TRANSFORM_PREFIX}{self.transformed_input}' in loop_data, \
-            f'Action/{self.name} transformed input {self.transformed_input} not specified in loop_data'
-        if self.transformed_input:
-            inputs = loop_data[f'{constants.TRANSFORM_PREFIX}{self.transformed_input}']
+class EncoderMadeForwardPass(EncoderAction):
+    def __init__(self, name='', input_transform=None, latent_transform=None, encode=True, factor=1., active=True):
+        super(EncoderMadeForwardPass, self).__init__(
+            name, input_transform, latent_transform, encode=encode, factor=factor, active=active)
 
-        return -context["drmade"].made.log_prob(context['drmade'].encoder(inputs))
+    def function(self, context, loop_data, inputs, latent, outputs, **kwargs):
+        return -context['drmade'].made.log_prob(latent)
