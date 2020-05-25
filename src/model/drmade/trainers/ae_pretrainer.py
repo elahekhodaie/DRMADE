@@ -32,7 +32,6 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         pgd_latent_randomize = hparams.get('pgd_latent/randomize', model_config.pretrain_ae_latent_pgd_randomize)
         pgd_latent = {'eps': pgd_latent_eps, 'iterations': pgd_latent_iterations, 'alpha': pgd_latent_alpha,
                       'randomize': pgd_latent_randomize, 'input_limits': latent_input_limits}
-        print('latent', pgd_latent, 'input', pgd_input)
         base_lr = hparams.get('base_lr', model_config.base_lr)
         lr_decay = hparams.get('lr_decay', model_config.lr_decay)
         lr_schedule = hparams.get('lr_schedule', model_config.lr_schedule)

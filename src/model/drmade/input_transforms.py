@@ -24,7 +24,6 @@ class PGDAttackAction(InputTransform):
         if self.transformed_input:
             inputs = dependency_inputs[self.transformed_input].data
         if not self.eps:
-            print(self.name, 'not active')
             return inputs
         if self.randomize:
             delta = torch.rand_like(inputs, requires_grad=True)
