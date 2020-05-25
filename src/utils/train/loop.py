@@ -16,10 +16,11 @@ class Loop:
             optimizers=tuple(),  # a list of optimizer names
             log_interval=0,
             no_grad=False,
+            active=True,
     ):
         self.name = name
         self.device = device
-        self.optimizers = optimizers
+        self.optimizers = optimizers or tuple()
         self.data_loader = data_loader
         self.input_transforms = input_transforms
         self.before_optimization_context_actions = before_optimization_context_actions
@@ -28,15 +29,21 @@ class Loop:
 
         self.log_interval = log_interval
         self.no_grad = no_grad
+        self.active = active
         self.loop_data = dict()
         self.verbose = False
 
+    def is_active(self, context: dict = None, **kwargs):
+        active = kwargs.get('active', self.active)
+        if callable(active):
+            return active(context=context, loop_data=self.loop_data, **kwargs)
+        return active
+
     def no_grad_active(self, context=None, **kwargs):
-        if self.no_grad is None or self.no_grad is False:
-            return False
-        if callable(self.no_grad):
-            return self.no_grad(context, **kwargs)
-        return self.no_grad
+        no_grad = kwargs.get('no_grad', self.no_grad)
+        if callable(no_grad):
+            return no_grad(context=context, loop_data=self.loop_data, **kwargs)
+        return no_grad
 
     def submit_loop_data(self, context):
         for item in self.loop_data:
@@ -51,8 +58,14 @@ class Loop:
                     self.loop_data[item], context[EPOCH]
                 )
 
-    def is_active(self, context: dict = None, **kwargs):
-        return True
+    def toggle_verbose(self, force=None):
+        self.verbose = not self.verbose if force is None else force
+        for action in self.loss_actions + \
+                      self.before_optimization_context_actions + \
+                      self.after_optimization_context_actions + \
+                      self.input_transforms:
+            action.toggle_verbose(force)
+        return self.verbose
 
     def __call__(
             self,
@@ -63,7 +76,7 @@ class Loop:
             **kwargs
     ):
         if self.verbose:
-            print(f'loop: {self.name} - setting up loop_data context')
+            print(f'\t- loop: {self.name} - setting up loop_data context')
         loop_data = self.loop_data
         loop_data.clear()
         assert (data_loader is None and self.data_loader is not None) or data_loader is not None, \
@@ -77,7 +90,7 @@ class Loop:
         time_ = time.time()
 
         if self.verbose:
-            print(f'\tsetting up loss_action scalars, call_counts, factors')
+            print(f'\t- setting up loss_action scalars, call_counts, factors')
         if self.loss_actions:
             loop_data[f'{RESULT_PREFIX}{SCALAR_PREFIX}loss'] = 0.
 
@@ -107,8 +120,7 @@ class Loop:
                         for name, value in results.items():
                             loop_data[f'{TRANSFORM_PREFIX}{input_tranform.name}{name}'] = value
                     else:
-                        if input_tranform.changes_input_directly(context, loop_data, **kwargs):
-                            loop_data[f'{TRANSFORM_PREFIX}{input_tranform.name}'] = results
+                        loop_data[f'{TRANSFORM_PREFIX}{input_tranform.name}'] = results
 
                 loss = torch.zeros(1).to(device)
                 for action in self.loss_actions:
@@ -164,3 +176,40 @@ class Loop:
                 loop_data[item] /= loop_data[f'{ACTION_PREFIX}{item[len(ACTION_FACTOR_PREFIX):]}/calls_count']
         self.loop_data = loop_data
         return loop_data
+
+    def __repr__(self):
+        if callable(self.active):
+            active = f'\t+ Active: func({self.active.__name__})\n'
+        elif isinstance(self.active, bool):
+            active = f'\t+ Active: {str(self.active)}\n'
+        else:
+            active = ''
+
+        if callable(self.no_grad):
+            no_grad = f'\t+ No-Gradient: func({self.no_grad.__name__})\n'
+        elif isinstance(self.active, bool):
+            no_grad = f'\t+ No-Gradient: {str(self.no_grad)}\n'
+        else:
+            no_grad = ''
+
+        device = f'\t+ Device: {self.device}\n'
+        data_loader = f'\t+ Data Loader: {self.data_loader}\n' if self.data_loader else ''
+        log_interval = f'\t+ Log Interval: {self.log_interval}\n' if self.log_interval else ''
+        optimizers = '\t+ Optimizers: [ {} ]\n'.format(
+            ','.join(optimizer for optimizer in self.optimizers)) if self.optimizers else ''
+        verbose = '\t+ Verbose\n' if self.verbose else ''
+        input_transforms = '\t+ Input Transforms:\n\t\t- {}\n'.format(
+            '\n\t\t- '.join(repr(transform) for transform in self.input_transforms),
+        ) if self.input_transforms else ''
+        loss_actions = '\t+ Loss Actions:\n\t\t- {}\n'.format(
+            '\n\t\t- '.join(repr(action) for action in self.loss_actions),
+        ) if self.loss_actions else ''
+        before_op_context_actions = '\t+ Before Optimization Context Actions:\n\t\t- {}\n'.format(
+            '\n\t\t- '.join(repr(action) for action in self.before_optimization_context_actions),
+        ) if self.before_optimization_context_actions else ''
+        after_op_context_actions = '\t+ After Optimization Context Actions:\n\t\t- {}\n'.format(
+            '\n\t\t- '.join(repr(action) for action in self.before_optimization_context_actions),
+        ) if self.after_optimization_context_actions else ''
+        return 'Loop {}({})\n{}{}{}{}{}{}{}{}{}{}{}'.format(
+            self.__class__.__name__, self.name, device, data_loader, active, no_grad, input_transforms,
+            loss_actions, before_op_context_actions, optimizers, after_op_context_actions, log_interval, verbose)

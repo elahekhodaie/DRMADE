@@ -9,17 +9,41 @@ class Action:  # returns a single factor of loss / new_context (   input or ...
             self,
             name,
             transformed_input=None,  # can be callable ( context, loop_data, **kwargs)
+            verbose=False,
+            active=True,
+            factor=1.,  # can be callable ( context, loop_data, **kwargs)
     ):
         self.name = name
         self.transformed_input = transformed_input
+        self.verbose = verbose
+        self.active = active
+        self.action_factor = factor
+
+    def toggle_verbose(self, force=None):
+        self.verbose = not self.verbose if force is None else force
+        return self.verbose
 
     def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
-        return True
+        active = kwargs.get('active', self.active)
+        if callable(active):
+            return active(context=context, loop_data=loop_data, **kwargs)
+        return active
 
     def factor(self, context: dict = None, loop_data: dict = None, **kwargs):
+        action_factor = self.action_factor
+        if callable(action_factor):
+            action_factor = action_factor(context, loop_data, **kwargs)
+        if isinstance(action_factor, (int, float)):
+            return action_factor if self.is_active(context, loop_data, **kwargs) else 0.
         if context is not None:
-            return context.get(f'{ACTION_FACTOR_PREFIX}{self.name}', 0) if self.is_active(context, **kwargs) else 0.
-        return 1. if self.is_active(context, **kwargs) else 0.
+            hparams_dict = context.get(HPARAMS_DICT, None)
+            name = action_factor or f'{ACTION_FACTOR_PREFIX}{self.name}'
+            if hparams_dict:
+                action_factor = hparams_dict.get(name, context.get(name, 0.))
+            else:
+                action_factor = context.get(name, 0.)
+            return action_factor if self.is_active(context, loop_data, **kwargs) else 0.
+        return 1. if self.is_active(context, loop_data, **kwargs) else 0.
 
     def dependency_input_names(self, context=None, loop_data: dict = None, **kwargs):
         result = []
@@ -53,5 +77,35 @@ class Action:  # returns a single factor of loss / new_context (   input or ...
                  dependency_inputs: dict = None, **kwargs):
         dependency_inputs = dependency_inputs or self.dependency_inputs(context, loop_data)
         result = self.action(inputs, outputs, context, loop_data, dependency_inputs, **kwargs)
-        if result:
+        if result is not None:
             return result
+
+    def __repr__(self):
+        if callable(self.transformed_input):
+            transform = f'func({self.transformed_input.__name__})'
+        elif isinstance(self.transformed_input, (list, tuple)):
+            transform = '[{}]'.format(','.join(item for item in self.transformed_input))
+        else:
+            transform = self.transformed_input
+
+        if callable(self.active):
+            active = f'func({self.active.__name__})'
+        elif isinstance(self.active, bool):
+            active = str(self.active)
+        else:
+            active = None
+
+        if callable(self.action_factor):
+            factor = f'func({self.action_factor.__name__})'
+        elif isinstance(self.action_factor, (int, float, str)):
+            factor = str(self.action_factor)
+        else:
+            factor = None
+        return '{}({})<{}{}{}{}>'.format(
+            self.__class__.__name__,
+            self.name,
+            f'transform:{transform}, ' if transform else '',
+            f'active:{active}, ' if active else '',
+            f'factor:{factor}, ' if factor else '',
+            'verbose' if self.verbose else '',
+        )

@@ -5,6 +5,10 @@ MODEL_PREFIX = 'model/'
 ACTION_PREFIX = 'action/'
 LOOP_PREFIX = 'loop/'
 
+LOOPS_LIST = 'loops_list'
+SCHEDULERS_LIST = 'schedulers_list'
+OPTIMIZERS_LIST = 'optimizers_list'
+
 RESULT_PREFIX = 'result/'
 SCALAR_PREFIX = 'scalar/'
 ACTION_FACTOR_PREFIX = 'action_factor/'
@@ -12,3 +16,6 @@ LEARNING_RATE_PREFIX = 'learning_rate/'
 DEVICE = 'device'
 EPOCH = 'epoch'
 HPARAM_PREFIX = 'hparam/'
+HPARAMS_DICT = 'hparams_dict'
+
+TRAINER_NAME = 'name'

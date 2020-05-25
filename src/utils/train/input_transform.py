@@ -9,15 +9,25 @@ class InputTransform:
             self,
             name,
             transformed_input=None,  # can be callable ( context, loop_data, **kwargs)
+            active=True,  # can be callable (context, loop_data, **kwargs)
+            verbose=False,
+            direct=True,
     ):
         self.name = name
         self.transformed_input = transformed_input
+        self.active = active
+        self.verbose = verbose
+        self.direct = direct
 
-    def is_active(self, context=None, loop_data: dict = None, **kwargs):
-        return True
+    def toggle_verbose(self, force=None):
+        self.verbose = not self.verbose if force is None else force
+        return self.verbose
 
-    def changes_input_directly(self, context=None, loop_data: dict = None, **kwargs):
-        return True
+    def is_active(self, context: dict = None, loop_data: dict = None, **kwargs):
+        active = kwargs.get('active', self.active)
+        if callable(active):
+            return active(context=context, loop_data=loop_data, **kwargs)
+        return active
 
     def dependency_input_names(self, context=None, loop_data: dict = None, **kwargs):
         result = []
@@ -30,8 +40,6 @@ class InputTransform:
                 result = [self.transformed_input]
             else:
                 result = list(self.transformed_input)
-        if not isinstance(result, Iterable) and not result:
-            return []
         if not isinstance(result, list) and result:
             return [result]
         return result
@@ -42,6 +50,9 @@ class InputTransform:
             dep: loop_data.get(f'{TRANSFORM_PREFIX}{dep}', None) for dep in self.dependency_input_names(
                 context, loop_data, **kwargs)
         }
+
+    def changes_input_directly(self, context=None, loop_data: dict = None, **kwargs):
+        return self.direct
 
     def transform(self, inputs, outputs=None, context=None, loop_data: dict = None,
                   dependency_inputs: dict = None, **kwargs):
@@ -54,3 +65,27 @@ class InputTransform:
             return self.transform(inputs, outputs, context, loop_data, dependency_inputs, **kwargs)
         else:
             return inputs
+
+    def __repr__(self):
+        if callable(self.transformed_input):
+            transform = f'func({self.transformed_input.__name__})'
+        elif isinstance(self.transformed_input, (list, tuple)):
+            transform = '[{}]'.format(','.join(item for item in self.transformed_input))
+        else:
+            transform = self.transformed_input
+
+        if callable(self.active):
+            active = f'func({self.active.__name__})'
+        elif isinstance(self.active, bool):
+            active = str(self.active)
+        else:
+            active = None
+
+        return '{}({})<{}{}{}{}>'.format(
+            self.__class__.__name__,
+            self.name,
+            f'transform:{transform}, ' if transform else '',
+            f'active:{active}, ' if active else '',
+            'verbose, ' if self.verbose else '',
+            'direct' if self.direct else ''
+        )
