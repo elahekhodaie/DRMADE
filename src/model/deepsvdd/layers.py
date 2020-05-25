@@ -92,23 +92,22 @@ class NCEFunction(Function):
         K = int(params[0].item())
         T = params[1].item()
         Z = params[2].item()
-
+        # print(x.device, y.device, memory.device, idx.device, params)
         momentum = params[3].item()
         batchSize = x.size(0)
         outputSize = memory.size(0)
         inputSize = memory.size(1)
 
         # sample positives & negatives
-        idx.select(1, 0).copy_(y.data)
+        idx.select(1, 0).copy_(y.to(x.device).data)
 
         # sample correspoinding weights
         weight = torch.index_select(memory, 0, idx.view(-1))
         weight.resize_(batchSize, K + 1, inputSize)
 
         # inner product
-        out = torch.bmm(weight, x.data.resize_(batchSize, inputSize, 1))
+        out = torch.bmm(weight, x.data.view(batchSize, inputSize, 1))
         out.div_(T).exp_()  # batchSize * self.K+1
-        x.data.resize_(batchSize, inputSize)
 
         if Z < 0:
             params[2] = out.mean() * outputSize
@@ -118,7 +117,7 @@ class NCEFunction(Function):
         out.div_(Z).resize_(batchSize, K + 1)
 
         self.save_for_backward(x, memory, y, weight, out, params)
-
+        print('nce func out', out)
         return out
 
     @staticmethod
@@ -129,26 +128,31 @@ class NCEFunction(Function):
         Z = params[2].item()
         momentum = params[3].item()
         batchSize = gradOutput.size(0)
-
+        # print('gradOut', gradOutput.device ,'weight', weight.device,'x', x.device, 'y', y.device)
         # gradients d Pm / d linear = exp(linear) / Z
         gradOutput.data.mul_(out.data)
         # add temperature
         gradOutput.data.div_(T)
 
-        gradOutput.data.resize_(batchSize, 1, K + 1)
-
         # gradient of linear
-        gradInput = torch.bmm(gradOutput.data, weight)
+        gradInput = torch.bmm(gradOutput.data.view(batchSize, 1, K + 1), weight.to(gradOutput.device))
+        # print('after bmm')
         gradInput.resize_as_(x)
 
         # update the non-parametric data
-        weight_pos = weight.select(1, 0).resize_as_(x)
+        weight_pos = weight.to(gradOutput.device).select(1, 0).resize_as_(x)
+        # print('weight pos select')
         weight_pos.mul_(momentum)
+        # print('weight pos mul momentum')
         weight_pos.add_(torch.mul(x.data, 1 - momentum))
+        # print('weight pos add x data 1 - momentum')
         w_norm = weight_pos.pow(2).sum(1, keepdim=True).pow(0.5)
+        # print('weight pos norm')
         updated_weight = weight_pos.div(w_norm)
+        # print('weight pos / norm', 'updated_weight', updated_weight.device)
         memory.index_copy_(0, y, updated_weight)
-
+        # print('memory index copy')
+        print(gradInput.device)
         return gradInput, None, None, None, None
 
 
@@ -163,12 +167,12 @@ class NCEAverage(nn.Module):
         self.device = device
         self.register_buffer('params', torch.tensor([K, T, -1, momentum]))
         stdv = 1. / math.sqrt(inputSize / 3)
-        self.register_buffer('memory', torch.rand(outputSize, inputSize).mul_(2 * stdv).add_(-stdv))
+        self.register_buffer('memory', torch.rand(outputSize, inputSize).to(device).mul_(2 * stdv).add_(-stdv))
 
     def forward(self, x, y):
         batchSize = x.size(0)
         idx = self.multinomial.draw(batchSize * (self.K + 1)).view(batchSize, -1).to(self.device)
-        out = NCEFunction.apply(x, y, self.memory, idx, self.params)
+        out = NCEFunction.apply(x, y, self.memory, idx.to(x.device), self.params)
         return out
 
 
@@ -218,7 +222,6 @@ class LinearAverageOp(Function):
 
 
 class LinearAverage(nn.Module):
-
     def __init__(self, inputSize, outputSize, T=0.07, momentum=0.5):
         super(LinearAverage, self).__init__()
         stdv = 1 / math.sqrt(inputSize)
