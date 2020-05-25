@@ -175,6 +175,7 @@ class DRMADETrainer(Trainer):
 
     def evaluate(self, ):
         record_extreme_cases = self.context[constants.HPARAMS_DICT].get('num_extreme_cases', config.num_extreme_cases)
+
         log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
             self.context['test_loader'], record_extreme_cases, record_extreme_cases)
 
@@ -215,15 +216,15 @@ class DRMADETrainer(Trainer):
             log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
                 self.context['train_loader'], record_extreme_cases, record_extreme_cases)
 
-            self.context['writer'].add_histogram(f'loss/decoder/drmade',
+            self.context['writer'].add_histogram(f'loss/decoder/train',
                                                  decoder_loss, self.context["epoch"])
-            self.context['writer'].add_histogram(f'loss/made/drmade',
+            self.context['writer'].add_histogram(f'loss/made/train',
                                                  log_prob, self.context["epoch"])
 
-            self._submit_latent(features, 'drmade')
+            self._submit_latent(features, 'train')
 
             if record_extreme_cases:
-                self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'drmade')
+                self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'train')
         self.context['writer'].flush()
 
     def submit_embedding(self):

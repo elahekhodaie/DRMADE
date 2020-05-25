@@ -13,11 +13,11 @@ from src.model.drmade.trainers.base_trainer import DRMADETrainer
 
 class RobustMadePreTrainer(DRMADETrainer):
     def __init__(self, hparams: dict = None, name=None, model=None, device=None, ):
-        super(RobustMadePreTrainer, self).__init__(hparams, name, model, device, hparams)
+        super(RobustMadePreTrainer, self).__init__(hparams, name, model, device)
 
         hparams = self.get(constants.HPARAMS_DICT)
         # turning off extreme case tracking for evaluation
-        hparams['record_extreme_cases'] = hparams.get('record_extreme_cases', 0)
+        hparams['num_extreme_cases'] = hparams.get('record_extreme_cases', 0)
 
         # pgd encoder made inputs
         input_limits = self.get('drmade').decoder.output_limits
