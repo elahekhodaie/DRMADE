@@ -69,7 +69,7 @@ class DRMADETrainer(Trainer):
             num_dist_parameters=hparams.get('num_dist_parameters', model_config.num_dist_parameters),
             distribution=hparams.get('distribution', model_config.distribution),
             parameters_transform=hparams.get('parameters_transform', model_config.parameters_transform),
-            parameters_min=hparams.get('paramteres_min_value', model_config.paramteres_min_value),
+            parameters_min=hparams.get('parameters_min_value', model_config.paramteres_min_value),
             encoder_num_layers=hparams.get('encoder_num_layers', model_config.encoder_num_layers),
             encoder_layers_activation=hparams.get('encoder_layers_activation', model_config.encoder_layers_activation),
             encoder_latent_activation=hparams.get('encoder_latent_activation', model_config.encoder_latent_activation),

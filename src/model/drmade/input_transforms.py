@@ -22,7 +22,7 @@ class PGDAttackAction(InputTransform):
         assert self.transformed_input is None or f'{constants.TRANSFORM_PREFIX}{self.transformed_input}' in loop_data, \
             f'InputTransform/{self.name} transformed input {self.transformed_input} not specified in loop_data'
         if self.transformed_input:
-            inputs = dependency_inputs[self.transformed_input].data
+            inputs = dependency_inputs[self.transformed_input]
         if not self.eps:
             return inputs
         if self.randomize:
@@ -31,7 +31,7 @@ class PGDAttackAction(InputTransform):
         else:
             delta = torch.zeros_like(inputs, requires_grad=True)
         for i in range(self.iterations):
-            loss = self.action(inputs + delta, outputs, context=context, loop_data=loop_data)
+            loss = self.action(inputs.data + delta, outputs, context=context, loop_data=loop_data, **kwargs)
             loss.backward()
             delta.data = (delta + self.alpha * delta.grad.detach().sign()).clamp(-self.eps, self.eps)
             delta.grad.zero_()
