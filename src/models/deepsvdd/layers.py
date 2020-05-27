@@ -249,7 +249,7 @@ class NCECriterion(nn.Module):
         Pnt = 1 / float(self.nLem)
         Pns = 1 / float(self.nLem)
 
-        # eq 5.1 : P(origin=model) = Pmt / (Pmt + k*Pnt)
+        # eq 5.1 : P(origin=models) = Pmt / (Pmt + k*Pnt)
         Pmt = x.select(1, 0)
         Pmt_div = Pmt.add(K * Pnt + self.eps)
         lnPmt = torch.div(Pmt, Pmt_div)

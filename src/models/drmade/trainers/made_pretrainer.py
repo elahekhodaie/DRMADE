@@ -3,12 +3,10 @@ from torch.optim import lr_scheduler, Adam
 import src.config as config
 
 import src.utils.train.constants as constants
-import src.model.drmade.config as model_config
-from src.model.drmade.input_transforms import PGDAttackAction
-from src.model.drmade.actions import EncoderMadeForwardPass
-from src.model.drmade.loops import RobustMadeFeedLoop
+import src.models.drmade.config as model_config
+from src.models.drmade.loops import RobustMadeFeedLoop
 
-from src.model.drmade.trainers.base_trainer import DRMADETrainer
+from src.models.drmade.trainers.base_trainer import DRMADETrainer
 
 
 class RobustMadePreTrainer(DRMADETrainer):

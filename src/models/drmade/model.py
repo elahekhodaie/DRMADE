@@ -3,8 +3,8 @@ from pathlib import Path
 
 import torch as t
 import torch.nn as nn
-from src.model.drmade.layers import Encoder, MADE, Decoder
-import src.model.drmade.config as model_config
+from src.models.drmade.layers import Encoder, MADE, Decoder
+import src.models.drmade.config as model_config
 
 class DRMADE(nn.Module):
     def __init__(

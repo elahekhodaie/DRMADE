@@ -4,18 +4,18 @@ from src.utils.data import DatasetSelection
 import torch
 import numpy as np
 import src.config as config
-import src.model.deepsvdd.config as model_config
+import src.models.deepsvdd.config as model_config
 from .model import DeepSVDD
 from torch.optim import lr_scheduler, SGD
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 from sklearn.metrics import roc_auc_score
 from .actions import Radius
-from src.model.drmade.input_transforms import PGDAttackAction
+from src.models.drmade.input_transforms import PGDAttackAction
 
 from .loops import RobustDeepSVDDLoop, RobustNCEDeepSVDDLoop
 import torchvision.transforms as transforms
-import src.model.deepsvdd.custom_transforms as custom_transforms
+import src.models.deepsvdd.custom_transforms as custom_transforms
 
 
 class DeepSVDDTrainer(Trainer):
@@ -70,8 +70,8 @@ class DeepSVDDTrainer(Trainer):
         context['test_loader'] = context['test_data'].get_dataloader(
             shuffle=False, batch_size=hparams.get('test_batch_size', config.test_batch_size))
 
-        print('initializing model')
-        context['model'] = model or DeepSVDD(
+        print('initializing models')
+        context['models'] = model or DeepSVDD(
             train_data=context['train_data'],
             latent_size=hparams.get('latent_size', model_config.latent_size),
             nce_t=hparams.get('nce_t', model_config.nce_t),
@@ -79,16 +79,16 @@ class DeepSVDDTrainer(Trainer):
             nce_m=hparams.get('nce_m', model_config.nce_m),
             device=device
         ).to(context[constants.DEVICE])
-        context["model"].resnet = context["model"].resnet.to(context[constants.DEVICE])
+        context["models"].resnet = context["models"].resnet.to(context[constants.DEVICE])
         print('initializing center - ', end='')
-        context["model"].init_center(
+        context["models"].init_center(
             context[constants.DEVICE], init_zero=hparams.get('zero_centered', False))
-        print(context["model"].center.mean())
+        print(context["models"].center.mean())
         checkpoint = hparams.get('checkpoint', config.checkpoint_drmade)
         if checkpoint:
-            context["model"].load(checkpoint, context[constants.DEVICE])
+            context["models"].load(checkpoint, context[constants.DEVICE])
 
-        print(f'model: {context["model"].name} was initialized')
+        print(f'models: {context["models"].name} was initialized')
 
         base_lr = hparams.get('base_lr', model_config.deepsvdd_sgd_base_lr)
         lr_decay = hparams.get('lr_decay', model_config.deepsvdd_sgd_lr_decay)
@@ -106,7 +106,7 @@ class DeepSVDDTrainer(Trainer):
 
         print(f'initializing optimizer SGD - base_lr:{base_lr}')
         optimizer = SGD(
-            context['model'].resnet.parameters(), lr=base_lr,
+            context['models'].resnet.parameters(), lr=base_lr,
             momentum=sgd_momentum,
             weight_decay=sgd_weight_decay,
         )
@@ -128,7 +128,7 @@ class DeepSVDDTrainer(Trainer):
                 '' if not context['normal_classes'] else '[' + ','.join(
                     str(i) for i in hparams.get('normal_classes', config.normal_classes)) + ']'
             ),
-            context['model'].name,
+            context['models'].name,
             f'|NCE{nce_factor}' if nce_factor else '',
             f'|Radius{radius_factor}' if radius_factor else '',
             '' if not pgd_eps else '|pgd-eps{}-iterations{}alpha{}{}'.format(
@@ -179,7 +179,7 @@ class DeepSVDDTrainer(Trainer):
 
     def save_model(self, output_path=None):
         output_path = output_path or self.context['check_point_saving_dir']
-        self.context['model'].save(output_path + f'/{self.context["name"]}-E{self.context["epoch"]}.pth')
+        self.context['models'].save(output_path + f'/{self.context["name"]}-E{self.context["epoch"]}.pth')
 
     def _evaluate_loop(self, data_loader, record_input_images=False):
         with torch.no_grad():
@@ -192,16 +192,16 @@ class DeepSVDDTrainer(Trainer):
                 images = images.to(self.context[constants.DEVICE])
                 if record_input_images:
                     input_images = torch.cat((input_images, images), dim=0)
-                radii = torch.cat((radii, self.context['model'].radius_hitmap(images)), dim=0)
-                features = torch.cat((features, self.context["model"](images) - self.context['model'].center), dim=0)
+                radii = torch.cat((radii, self.context['models'].radius_hitmap(images)), dim=0)
+                features = torch.cat((features, self.context["models"](images) - self.context['models'].center), dim=0)
                 labels = np.append(labels, label.numpy().astype(np.int8), axis=0)
         return radii, features, labels, input_images
 
     def knn_accuracy(self, K=200, recompute_memory=False):
-        self.context['model'].eval()
+        self.context['models'].eval()
         total = 0
         testsize = self.context['test_loader'].dataset.__len__()
-        trainFeatures = self.context['model'].lemniscate.memory.t()
+        trainFeatures = self.context['models'].lemniscate.memory.t()
 
         trainLabels = torch.LongTensor(self.context['train_loader'].dataset.labels).to(self.context[constants.DEVICE])
         C = trainLabels.max() + 1
@@ -213,7 +213,7 @@ class DeepSVDDTrainer(Trainer):
                 images = images.to(self.context[constants.DEVICE])
                 targets, indexes = outputs
                 batchSize = images.size(0)
-                features = self.context['model'](images) - self.context['model'].center
+                features = self.context['models'](images) - self.context['models'].center
                 trainFeatures[:, batch_idx * batchSize:batch_idx * batchSize + batchSize] = features.data.t()
             trainLabels = torch.LongTensor(temploader.dataset.labels).to(self.context[constants.DEVICE])
             self.context['train_loader'].dataset.transform = transform_bak
@@ -226,7 +226,7 @@ class DeepSVDDTrainer(Trainer):
                 images = images.to(self.context[constants.DEVICE])
                 outputs = outputs.to(self.context[constants.DEVICE])
                 batchSize = images.size(0)
-                features = self.context['model'](images) - self.context['model'].center
+                features = self.context['models'](images) - self.context['models'].center
 
                 dist = torch.mm(features, trainFeatures)
 
@@ -236,7 +236,7 @@ class DeepSVDDTrainer(Trainer):
 
                 retrieval_one_hot.resize_(batchSize * K, C).zero_()
                 retrieval_one_hot.scatter_(1, retrieval.view(-1, 1), 1)
-                yd_transform = yd.clone().div_(self.context['model'].nce_t).exp_()
+                yd_transform = yd.clone().div_(self.context['models'].nce_t).exp_()
                 probs = torch.sum(
                     torch.mul(retrieval_one_hot.view(batchSize, -1, C), yd_transform.view(batchSize, -1, 1)), 1)
                 _, predictions = probs.sort(1, True)
@@ -256,7 +256,7 @@ class DeepSVDDTrainer(Trainer):
         for images, labels in self.context['test_loader']:
             images = images.to(self.context[constants.DEVICE])
             labels = labels.numpy()
-            result = self.context['model'].classify(images)
+            result = self.context['models'].classify(images)
             for index, top5 in enumerate(result):
                 if labels[index] in top5:
                     top_5_accuracy += 1

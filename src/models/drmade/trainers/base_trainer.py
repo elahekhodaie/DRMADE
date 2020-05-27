@@ -1,17 +1,16 @@
 import torch as torch
-from torch.optim import lr_scheduler, Adam
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 import numpy as np
 
 from sklearn.metrics import roc_auc_score
 from src.utils.data import DatasetSelection
-from src.model.drmade.model import DRMADE
+from src.models.drmade.model import DRMADE
 import src.config as config
 
 from src.utils.train import Trainer
 import src.utils.train.constants as constants
-import src.model.drmade.config as model_config
+import src.models.drmade.config as model_config
 
 
 class DRMADETrainer(Trainer):
@@ -57,7 +56,7 @@ class DRMADETrainer(Trainer):
         context['test_loader'] = context['test_data'].get_dataloader(
             shuffle=False, batch_size=hparams.get('test_batch_size', config.test_batch_size))
 
-        print('initializing model')
+        print('initializing models')
         context['drmade'] = drmade or DRMADE(
             input_size=context["input_shape"][1],
             num_channels=context["input_shape"][0],
@@ -95,7 +94,7 @@ class DRMADETrainer(Trainer):
         if checkpoint_made:
             context["drmade"].made.load(checkpoint_made, context[constants.DEVICE])
 
-        print(f'model: {context["drmade"].name} was initialized')
+        print(f'models: {context["drmade"].name} was initialized')
         # setting up tensorboard data summerizer
         context['name'] = name or '{}[{}]'.format(
             hparams.get('dataset', config.dataset).__name__,
@@ -174,6 +173,7 @@ class DRMADETrainer(Trainer):
         self.context['writer'].add_images(f'worst_reconstruction/{title}', result_images, self.context['epoch'])
 
     def evaluate(self, ):
+        self.get('drmade').eval()
         record_extreme_cases = self.context[constants.HPARAMS_DICT].get('num_extreme_cases', config.num_extreme_cases)
 
         log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
@@ -226,6 +226,7 @@ class DRMADETrainer(Trainer):
             if record_extreme_cases:
                 self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'train')
         self.context['writer'].flush()
+        self.get('drmade').train()
 
     def submit_embedding(self):
         log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(

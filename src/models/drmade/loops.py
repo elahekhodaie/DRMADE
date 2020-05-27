@@ -1,7 +1,7 @@
 from src.utils.train import Loop
 from .actions import EncoderMadeForwardPass, EncoderDecoderForwardPass
 from .input_transforms import PGDAttackAction, Encode
-import src.model.drmade.config as model_config
+import src.models.drmade.config as model_config
 import src.config as config
 
 

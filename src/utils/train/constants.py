@@ -1,7 +1,7 @@
 TRANSFORM_PREFIX = 'transform/'
 OPTIMIZER_PREFIX = 'optimizer/'
 SCHEDULER_PREFIX = 'scheduler/'
-MODEL_PREFIX = 'model/'
+MODEL_PREFIX = 'models/'
 ACTION_PREFIX = 'action/'
 LOOP_PREFIX = 'loop/'
 

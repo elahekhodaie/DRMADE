@@ -1,10 +1,10 @@
 from src.utils.train import Loop
 from src.utils.train import constants
 import src.config as config
-import src.model.deepsvdd.config as model_config
+import src.models.deepsvdd.config as model_config
 import torch
 from .actions import LogProb, UpdateMemory, Radius, IterationDifference, NCE
-from src.model.drmade.input_transforms import PGDAttackAction
+from src.models.drmade.input_transforms import PGDAttackAction
 
 
 class RobustDeepSVDDLoop(Loop):

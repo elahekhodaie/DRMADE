@@ -1,7 +1,7 @@
 from torch.distributions.normal import Normal
 import torch
 
-# model architecture
+# models architecture
 latent_size = 16
 
 made_hidden_layers = [132, 132, 132]
@@ -38,7 +38,7 @@ lr_decay = 0.999995  # Learning rate decay, applied every step of the optimizati
 lr_schedule = 512  # interval of epochs to reduce learning rate 50%
 base_lr = 0.0002
 
-noising_factor = 0  # the noise to add to each input while training the model
+noising_factor = 0  # the noise to add to each input while training the models
 latent_cor_regularization_factor = 0.
 latent_cor_regularization_abs = False
 latent_zero_regularization_factor = 0.

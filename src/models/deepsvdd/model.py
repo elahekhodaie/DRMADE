@@ -5,7 +5,7 @@ import torchvision
 
 import numpy as np
 from pathlib import Path
-from src.model.deepsvdd.layers import NCEAverage, LinearAverage, NCECriterion
+from src.models.deepsvdd.layers import NCEAverage, LinearAverage, NCECriterion
 
 
 class DeepSVDD(nn.Module):

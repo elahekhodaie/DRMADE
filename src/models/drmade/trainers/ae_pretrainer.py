@@ -3,10 +3,10 @@ from torch.optim import lr_scheduler, Adam
 import src.config as config
 
 import src.utils.train.constants as constants
-import src.model.drmade.config as model_config
+import src.models.drmade.config as model_config
 
-from src.model.drmade.loops import RobustAEFeedLoop
-from src.model.drmade.trainers.base_trainer import DRMADETrainer
+from src.models.drmade.loops import RobustAEFeedLoop
+from src.models.drmade.trainers.base_trainer import DRMADETrainer
 
 
 class RobustAutoEncoderPreTrainer(DRMADETrainer):
@@ -58,7 +58,7 @@ class RobustAutoEncoderPreTrainer(DRMADETrainer):
         self.add_scheduler('ae', lr_scheduler.MultiplicativeLR(
             optimizer, lr_lambda=self.get('lr_multiplicative_factor_lambda'), last_epoch=-1))
 
-        self.set(constants.TRAINER_NAME, name or 'PreTrain-{}-{}:{}|{}{}|Adam-lr{}-schedule{}-decay{}'.format(
+        self.set(constants.TRAINER_NAME, name or 'PreTrain-{}-{}:{}|{}{}Adam-lr{}-schedule{}-decay{}'.format(
             self.get(constants.TRAINER_NAME), self.get('drmade').encoder.name, self.get('drmade').decoder.name,
             '' if not pgd_eps else 'pgd-eps{}-iterations{}alpha{}{}|'.format(
                 pgd_eps, pgd_iterations, pgd_alpha, 'randomized' if pgd_randomize else '', ),
