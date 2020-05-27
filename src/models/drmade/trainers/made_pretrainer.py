@@ -14,8 +14,10 @@ class RobustMadePreTrainer(DRMADETrainer):
         super(RobustMadePreTrainer, self).__init__(hparams, name, model, device)
 
         hparams = self.get(constants.HPARAMS_DICT)
-        # turning off extreme case tracking for evaluation
+        # turning off unnecessary evaluational functions
         hparams['num_extreme_cases'] = hparams.get('record_extreme_cases', 0)
+        hparams['embedding_interval'] = 0
+        hparams['submit_latent_interval'] = 0
 
         # pgd encoder made inputs
         input_limits = self.get('drmade').decoder.output_limits

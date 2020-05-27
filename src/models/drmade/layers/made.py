@@ -148,10 +148,7 @@ class MADE(nn.Module):
         for z, transform in enumerate(self.parameters_transform):
             parameters.append(self.parameters_min[z] + transform(
                 output[:, [j for i in range(self.nin) for j in
-                           range(i + self.nin * self.num_mix * z,
-                                 self.nin * self.num_mix * (z + 1),
-                                 self.nin)]]
-            ))
+                           range(i + self.nin * self.num_mix * z, self.nin * self.num_mix * (z + 1), self.nin)]]))
 
         return parameters
 
@@ -162,8 +159,8 @@ class MADE(nn.Module):
 
         features = features.repeat(1, self.num_mix)[:, self._feature_perm_indexes]
         if features.requires_grad:
-            features.register_hook(output.register_hook(
-                lambda grad: torch.where(torch.isnan(grad) + torch.isinf(grad), torch.zeros_like(grad), grad)))
+            features.register_hook(
+                lambda grad: torch.where(torch.isnan(grad) + torch.isinf(grad), torch.zeros_like(grad), grad))
         if parameters is None:
             parameters = self.get_dist_parameters(output)
 

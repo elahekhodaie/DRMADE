@@ -33,7 +33,6 @@ decoder_layers_activation = 'elu'  # leaky_relu, elu, relu
 decoder_distance_norm = 2
 decoder_distance_eps = 1e-5
 
-
 lr_decay = 0.999995  # Learning rate decay, applied every step of the optimization
 lr_schedule = 512  # interval of epochs to reduce learning rate 50%
 base_lr = 0.0002
@@ -76,3 +75,11 @@ checkpoint_drmade = None
 checkpoint_encoder = None
 checkpoint_decoder = None
 checkpoint_made = None
+
+evaluation_interval = 1
+validation_interval = 16
+embedding_interval = 512
+save_interval = 64
+num_extreme_cases = 16
+submit_latent_interval = 1
+evaluate_train_interval = 1

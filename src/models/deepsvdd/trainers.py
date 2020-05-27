@@ -317,9 +317,10 @@ class DeepSVDDTrainer(Trainer):
         self.context['writer'].flush()
 
     def train(self):
-        evaluation_interval = self.context['hparams'].get('evaluation_interval', config.evaluation_interval)
-        embedding_interval = self.context['hparams'].get('embedding_interval', config.embedding_interval)
-        save_interval = self.context['hparams'].get('save_interval', config.save_interval)
+        evaluation_interval = self.get(constants.HPARAMS_DICT).get(
+            'evaluation_interval', model_config.evaluation_interval)
+        embedding_interval = self.get(constants.HPARAMS_DICT).get('embedding_interval', model_config.embedding_interval)
+        save_interval = self.get(constants.HPARAMS_DICT).get('save_interval', model_config.save_interval)
 
         for epoch in range(self.context['hparams'].get('start_epoch', 0), self.context['max_epoch']):
             self.context['epoch'] = epoch

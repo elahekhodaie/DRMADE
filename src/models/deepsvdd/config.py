@@ -18,3 +18,11 @@ deepsvdd_pgd_eps = 0
 deepsvdd_pgd_iterations = 20
 deepsvdd_pgd_alpha = 0.05
 deepsvdd_pgd_randomize = False
+
+evaluation_interval = 1
+validation_interval = 16
+embedding_interval = 512
+save_interval = 64
+num_extreme_cases = 16
+submit_latent_interval = 1
+evaluate_train_interval = 1

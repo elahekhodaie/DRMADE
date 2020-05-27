@@ -26,15 +26,7 @@ dataloader_shuffle = True
 dataloader_drop_last = True
 
 # data I/O
-save_interval = 16
-validation_interval = 16
-evaluation_interval = 16
-commit_images_interval = 4
-embedding_interval = 1024
-track_weights_interval = 64
 log_data_feed_loop_interval = 8
-log_evaluation_loop_interval = 8
-num_extreme_cases = 16
 
 output_root = './output'
 data_dir = '.' + '/data'  # Location for the dataset

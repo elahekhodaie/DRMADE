@@ -174,8 +174,11 @@ class DRMADETrainer(Trainer):
 
     def evaluate(self, ):
         self.get('drmade').eval()
-        record_extreme_cases = self.context[constants.HPARAMS_DICT].get('num_extreme_cases', config.num_extreme_cases)
-
+        record_extreme_cases = self.get(constants.HPARAMS_DICT).get('num_extreme_cases', model_config.num_extreme_cases)
+        submit_latent_interval = self.get(constants.HPARAMS_DICT).get(
+            'submit_latent_interval', model_config.submit_latent_interval)
+        evaluate_train_interval = self.get(constants.HPARAMS_DICT).get(
+            'evaluate_train_interval', model_config.evaluate_train_interval)
         log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
             self.context['test_loader'], record_extreme_cases, record_extreme_cases)
 
@@ -209,10 +212,12 @@ class DRMADETrainer(Trainer):
             self._submit_extreme_reconstructions(
                 images[(anomaly_indexes == False)], reconstruction[(anomaly_indexes == False)],
                 decoder_loss[(anomaly_indexes == False)], 'test/normal')
-        self._submit_latent(features[anomaly_indexes], 'test/anomaly')
-        self._submit_latent(features[(anomaly_indexes == False)], 'test/normal')
 
-        if self.context[constants.HPARAMS_DICT].get('evaluate_train_data', True):
+        if submit_latent_interval and self.get(constants.EPOCH) % submit_latent_interval == 0:
+            self._submit_latent(features[anomaly_indexes], 'test/anomaly')
+            self._submit_latent(features[(anomaly_indexes == False)], 'test/normal')
+
+        if evaluate_train_interval and self.get(constants.EPOCH) % evaluate_train_interval == 0:
             log_prob, decoder_loss, features, labels, images, reconstruction = self._evaluate_loop(
                 self.context['train_loader'], record_extreme_cases, record_extreme_cases)
 
@@ -220,8 +225,8 @@ class DRMADETrainer(Trainer):
                                                  decoder_loss, self.context["epoch"])
             self.context['writer'].add_histogram(f'loss/made/train',
                                                  log_prob, self.context["epoch"])
-
-            self._submit_latent(features, 'train')
+            if submit_latent_interval and self.get(constants.EPOCH) % submit_latent_interval == 0:
+                self._submit_latent(features, 'train')
 
             if record_extreme_cases:
                 self._submit_extreme_reconstructions(images, reconstruction, decoder_loss, 'train')
@@ -240,17 +245,17 @@ class DRMADETrainer(Trainer):
         self.context['writer'].flush()
 
     def train(self):
-
         evaluation_interval = self.context[constants.HPARAMS_DICT].get(
-            'evaluation_interval', config.evaluation_interval)
-        embedding_interval = self.context[constants.HPARAMS_DICT].get('embedding_interval', config.embedding_interval)
-        save_interval = self.context[constants.HPARAMS_DICT].get('save_interval', config.save_interval)
+            'evaluation_interval', model_config.evaluation_interval)
+        embedding_interval = self.context[constants.HPARAMS_DICT].get(
+            'embedding_interval', model_config.embedding_interval)
+        save_interval = self.context[constants.HPARAMS_DICT].get('save_interval', model_config.save_interval)
         start_epoch = self.context[constants.HPARAMS_DICT].get('start_epoch', 0)
         max_epoch = self.context[constants.HPARAMS_DICT].get('max_epoch', model_config.max_epoch)
-        if self.verbose:
-            print('Starting Training - intervals:[',
-                  'evaluation:{}, embedding:{}, save:{}, start_epoch:{}, max_epoch:{}]'.format(
-                      evaluation_interval, embedding_interval, save_interval, start_epoch, max_epoch))
+        print('Starting Training - intervals:[',
+              'evaluation:{}, embedding:{}, save:{}, start_epoch:{}, max_epoch:{} ]'.format(
+                  evaluation_interval, embedding_interval, save_interval, start_epoch, max_epoch))
+
         for epoch in range(start_epoch, max_epoch):
             self.context[constants.EPOCH] = epoch
             print(f'epoch {self.context[constants.EPOCH]:5d}')
