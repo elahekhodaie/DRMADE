@@ -10,6 +10,10 @@ from src.models.drmade.trainers.base_trainer import DRMADETrainer
 
 
 class partialConnectedEncoder(DRMADETrainer):
+
+    # for the partial connected encoder mode , if we don't need the pgd attack mode
+    # we can simply change the attach epsilon in config to zero
+
     def __init__(self, hparams = None ,  name = None,  model = None, device= None):
         super(partialConnectedEncoder, self).__init__(hparams, name, model, device, )
         hparams = self.get(constants.HPARAMS_DICT)

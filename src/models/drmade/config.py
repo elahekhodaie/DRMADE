@@ -49,7 +49,8 @@ latent_distance_normalize_features = False
 latent_distance_norm = 2
 parameters_regularization_factor = [0, 1]
 
-pretrain_ae_pgd_eps = 0.2
+#pretrain_ae_pgd_eps = 0.2
+pretrain_ae_pgd_eps = 0
 pretrain_ae_pgd_iterations = 20
 pretrain_ae_pgd_alpha = 0.05
 pretrain_ae_pgd_randomize = False
@@ -64,7 +65,8 @@ pretrain_made_pgd_iterations = 1
 pretrain_made_pgd_alpha = 0.05
 pretrain_made_pgd_randomize = False
 
-pretrain_encoder_made_pgd_eps = 0.2
+#pretrain_encoder_made_pgd_eps = 0.2
+pretrain_encoder_made_pgd_eps = 0
 pretrain_encoder_made_pgd_iterations = 1
 pretrain_encoder_made_pgd_alpha = 0.05
 pretrain_encoder_made_pgd_randomize = False
