@@ -1,11 +1,13 @@
+
+
 from torch.optim import lr_scheduler, Adam
 
 import src.config as config
 
 import src.utils.train.constants as constants
-import src.models.drmade.config as config
-
+import src.models.drmade.config as model_config
 from src.models.drmade.loops import RobustMadeFeedLoop
+
 from src.models.drmade.trainers.base_trainer import DRMADETrainer
 
 
@@ -19,26 +21,48 @@ class partialConnectedEncoder(DRMADETrainer):
         hparams = self.get(constants.HPARAMS_DICT)
         name = 'partialConnectedEncoder'
 
+        hparams = self.get(constants.HPARAMS_DICT)
         # base_lr = hparams.get('base_lr', config.base_lr)
         # lr_decay = hparams.get('lr_decay', config.lr_decay)
         # lr_schedule = hparams.get('lr_schedule', config.lr_schedule)
 
         # pgd encoder decoder inputs
+        # input_limits = self.get('drmade').decoder.output_limits
+        # pgd_eps = hparams.get('pgd/eps', model_config.pretrain_ae_pgd_eps)
+        # pgd_iterations = hparams.get('pgd/iterations', model_config.pretrain_ae_pgd_iterations)
+        # pgd_alpha = hparams.get('pgd/alpha', model_config.pretrain_ae_pgd_alpha)
+        # pgd_randomize = hparams.get('pgd/randomize', model_config.pretrain_ae_pgd_randomize)
+        # pgd_input = {'eps': pgd_eps, 'iterations': pgd_iterations, 'alpha': pgd_alpha, 'randomize': pgd_randomize,
+        #              'input_limits': input_limits}
+        # # pgd decoder inputs
+        # latent_input_limits = self.get('drmade').encoder.output_limits
+        # pgd_latent_eps = hparams.get('pgd_latent/eps', model_config.pretrain_ae_latent_pgd_eps)
+        # pgd_latent_iterations = hparams.get('pgd_latent/iterations', model_config.pretrain_ae_latent_pgd_iterations)
+        # pgd_latent_alpha = hparams.get('pgd_latent/alpha', model_config.pretrain_ae_latent_pgd_alpha)
+        # pgd_latent_randomize = hparams.get('pgd_latent/randomize', model_config.pretrain_ae_latent_pgd_randomize)
+        # pgd_latent = {'eps': pgd_latent_eps, 'iterations': pgd_latent_iterations, 'alpha': pgd_latent_alpha,
+        #               'randomize': pgd_latent_randomize, 'input_limits': latent_input_limits}
+        # base_lr = hparams.get('base_lr', model_config.base_lr)
+        # lr_decay = hparams.get('lr_decay', model_config.lr_decay)
+        # lr_schedule = hparams.get('lr_schedule', model_config.lr_schedule)
+
+        # pgd encoder made inputs
         input_limits = self.get('drmade').decoder.output_limits
-        pgd_eps = hparams.get('pgd/eps', model_config.pretrain_ae_pgd_eps)
-        pgd_iterations = hparams.get('pgd/iterations', model_config.pretrain_ae_pgd_iterations)
-        pgd_alpha = hparams.get('pgd/alpha', model_config.pretrain_ae_pgd_alpha)
-        pgd_randomize = hparams.get('pgd/randomize', model_config.pretrain_ae_pgd_randomize)
+        pgd_eps = hparams.get('pgd/eps', model_config.pretrain_encoder_made_pgd_eps)
+        pgd_iterations = hparams.get('pgd/iterations', model_config.pretrain_encoder_made_pgd_iterations)
+        pgd_alpha = hparams.get('pgd/alpha', model_config.pretrain_encoder_made_pgd_alpha)
+        pgd_randomize = hparams.get('pgd/randomize', model_config.pretrain_encoder_made_pgd_randomize)
         pgd_input = {'eps': pgd_eps, 'iterations': pgd_iterations, 'alpha': pgd_alpha, 'randomize': pgd_randomize,
                      'input_limits': input_limits}
-        # pgd decoder inputs
+        # pgd latent
         latent_input_limits = self.get('drmade').encoder.output_limits
-        pgd_latent_eps = hparams.get('pgd_latent/eps', model_config.pretrain_ae_latent_pgd_eps)
-        pgd_latent_iterations = hparams.get('pgd_latent/iterations', model_config.pretrain_ae_latent_pgd_iterations)
-        pgd_latent_alpha = hparams.get('pgd_latent/alpha', model_config.pretrain_ae_latent_pgd_alpha)
-        pgd_latent_randomize = hparams.get('pgd_latent/randomize', model_config.pretrain_ae_latent_pgd_randomize)
+        pgd_latent_eps = hparams.get('pgd_latent/eps', model_config.pretrain_made_pgd_eps)
+        pgd_latent_iterations = hparams.get('pgd_latent/iterations', model_config.pretrain_made_pgd_iterations)
+        pgd_latent_alpha = hparams.get('pgd_latent/alpha', model_config.pretrain_made_pgd_alpha)
+        pgd_latent_randomize = hparams.get('pgd_latent/randomize', model_config.pretrain_made_pgd_randomize)
         pgd_latent = {'eps': pgd_latent_eps, 'iterations': pgd_latent_iterations, 'alpha': pgd_latent_alpha,
                       'randomize': pgd_latent_randomize, 'input_limits': latent_input_limits}
+
         base_lr = hparams.get('base_lr', model_config.base_lr)
         lr_decay = hparams.get('lr_decay', model_config.lr_decay)
         lr_schedule = hparams.get('lr_schedule', model_config.lr_schedule)
