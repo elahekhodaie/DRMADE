@@ -150,7 +150,7 @@ class DRMADETrainer(Trainer):
             self.context['writer'].add_histogram(f'latent/{title}/{i}', features[:, i], self.context["epoch"])
 
     def _submit_extreme_reconstructions(self, input_images, reconstructed_images, decoder_loss, title=''):
-        num_cases = self.context[constants.HPARAMS_DICT].get('num_extreme_cases', config.num_extreme_cases)
+        num_cases = self.context[constants.HPARAMS_DICT].get('num_extreme_cases', model_config.num_extreme_cases)
         distance_hitmap = self.context['drmade'].decoder.distance_hitmap(input_images,
                                                                          reconstructed_images).detach().cpu().numpy()
 
