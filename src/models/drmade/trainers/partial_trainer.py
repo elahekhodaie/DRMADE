@@ -46,6 +46,6 @@ class partialConnectedEncoder(RobustMadePreTrainer):
 
         assert max(freezed_layers)<len(self.get('drmade').encoder.convs)
         for i in freezed_layers:
-            print (f'freeze encoder convs layer {i}')
+            print(f'freezed layers are {i}')
             for parameter in self.get('drmade').encoder.convs[i].parameters():
                 parameter.requires_grad = False

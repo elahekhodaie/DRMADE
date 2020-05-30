@@ -15,6 +15,7 @@ num_dist_parameters = 2
 parameters_transform = [lambda x: x, torch.exp]  # mean, std
 paramteres_min_value = [0.0, 0.5]
 parameters_regularization = [lambda x: 0, lambda x: torch.sum(1 / x)]
+freezed_encoder_layers = []
 
 encoder_use_bias = False
 encoder_bn_affine = False

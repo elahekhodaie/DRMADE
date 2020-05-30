@@ -76,6 +76,7 @@ class DRMADETrainer(Trainer):
             decoder_num_layers=hparams.get('decoder_num_layers', model_config.decoder_num_layers),
             decoder_layers_activation=hparams.get('decoder_layers_activation', model_config.decoder_layers_activation),
             decoder_output_activation=hparams.get('decoder_output_activation', model_config.decoder_output_activation),
+            freezed_encoder_layers = hparams.get('freezed_encoder_layers', model_config.freezed_encoder_layers)
         ).to(context[constants.DEVICE])
         context["drmade"].encoder = context["drmade"].encoder.to(context[constants.DEVICE])
         context["drmade"].made = context["drmade"].made.to(context[constants.DEVICE])
