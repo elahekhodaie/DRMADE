@@ -17,9 +17,9 @@ class partialConnectedEncoder(RobustMadePreTrainer):
         lr_decay = hparams.get('lr_decay', model_config.lr_decay)
         lr_schedule = hparams.get('lr_schedule', model_config.lr_schedule)
 
+        super().__init__(self, hparams, name, model, device)
+      #  super(RobustMadePreTrainer, self).__init__(hparams, name, model, device)
 
-        super(RobustMadePreTrainer, self).__init__(hparams, name, model, device)
-        
         hparams = self.get(constants.HPARAMS_DICT)
         hparams['submit_latent_interval'] = 1
         hparams['submit_latent_interval'] = 1
@@ -44,10 +44,10 @@ class partialConnectedEncoder(RobustMadePreTrainer):
         for parameter in self.get('drmade').encoder.parameters():
             parameter.requires_grad = True
 
-        assert max(freezed_layers)<len(self.get('drmade').encoder.convs)
+        assert max(freezed_layers)<len(self.get('drmade').encoder.conv_layers)
         for i in freezed_layers:
             print(f'frozen layers are {i}')
-            for parameter in self.get('drmade').encoder.convs[i].parameters():
+            for parameter in self.get('drmade').encoder.conv_layers[i].parameters():
                 parameter.requires_grad = False
 
         self.setup_writer()
