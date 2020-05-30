@@ -17,7 +17,7 @@ class partialConnectedEncoder(RobustMadePreTrainer):
         lr_decay = hparams.get('lr_decay', model_config.lr_decay)
         lr_schedule = hparams.get('lr_schedule', model_config.lr_schedule)
 
-        super().__init__(self, hparams, name, model, device)
+        super().__init__( hparams, name, model, device)
       #  super(RobustMadePreTrainer, self).__init__(hparams, name, model, device)
 
         hparams = self.get(constants.HPARAMS_DICT)
