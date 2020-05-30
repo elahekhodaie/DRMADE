@@ -90,4 +90,4 @@ class RobustMadePreTrainer(DRMADETrainer):
             interval=hparams.get('validation_interval', config.validation_interval),
             log_interval=hparams.get('log_interval', config.log_data_feed_loop_interval)))
 
-        self.setup_writer()
+       # self.setup_writer()
