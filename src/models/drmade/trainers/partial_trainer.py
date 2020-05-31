@@ -44,10 +44,10 @@ class partialConnectedEncoder(RobustMadePreTrainer):
         for parameter in self.get('drmade').encoder.parameters():
             parameter.requires_grad = True
 
-        assert max(freezed_layers)<len(self.get('drmade').encoder.conv_layers)
-        for i in freezed_layers:
-            print(f'frozen layers are {i}')
-            for parameter in self.get('drmade').encoder.conv_layers[i].parameters():
-                parameter.requires_grad = False
+        # assert max(freezed_layers)<len(self.get('drmade').encoder.conv_layers)
+        # for i in freezed_layers:
+        #     print(f'frozen layers are {i}')
+        #     for parameter in self.get('drmade').encoder.conv_layers[i].parameters():
+        #         parameter.requires_grad = False
 
         self.setup_writer()
