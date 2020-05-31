@@ -23,6 +23,7 @@ class partialConnectedEncoder(RobustMadePreTrainer):
         hparams = self.get(constants.HPARAMS_DICT)
         hparams['submit_latent_interval'] = 1
         hparams['submit_latent_interval'] = 1
+        hparams['num_extreme_cases'] = 16
 
         hparams['embedding_interval'] = 512
 
@@ -39,7 +40,6 @@ class partialConnectedEncoder(RobustMadePreTrainer):
 
         self.add_optimizer('partial_connected', optimizer, replace=True)
 
-        # freezed folent
         print('unfreezing encoder')
         for parameter in self.get('drmade').encoder.parameters():
             parameter.requires_grad = True
